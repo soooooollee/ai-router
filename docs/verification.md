@@ -23,6 +23,7 @@
 | 漏洞 | npm 0 个漏洞；Go 无可达漏洞 | `npm audit --audit-level=high --prefix web`、`govulncheck ./...` |
 | Docker 非 root | 镜像构建成功；UID 100；配置 0600；health、ready、鉴权 admin 均为 200 | `docker build -t airoute:optimization-check .` 及本机容器 Smoke |
 | 本机 Race 长稳 | 60 秒通过，3,955 轮 × 100 并发流，共 395,500 条 | `AIROUTE_SOAK_DURATION=60s go test -race ./internal/gateway -run '^TestLongSoak$' -count=1 -timeout=2m -v` |
+| 24 小时 Race 长稳 | 仓库所有者确认本机通过 | 2026-07-13 用户确认；原始日志未入库，因此不声明未经记录的吞吐量或精确起止时间 |
 
 ## 真实链路验证
 
@@ -48,8 +49,8 @@
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
 | GitHub CI Workflow | 远程完整通过 | 主分支 Run [`29234871105`](https://github.com/soooooollee/ai-router/actions/runs/29234871105)，2026-07-13；Test、Playwright、Race、Vet、Build、漏洞/许可证、三平台 Smoke 与 Docker 全部成功 |
-| GitHub Release Workflow | 代码具备，未打正式标签 | 远程仓库已就绪；等待 24 小时预发布长稳后再验证 OIDC、GHCR 与六平台发行制品 |
+| GitHub Release Workflow | 发布前门槛完成，等待正式标签 | 24 小时 Race 已由仓库所有者确认通过；下一步验证 OIDC、GHCR 与六平台发行制品 |
 | 外部 Key 轮换 | 所有者接受风险 | 2026-07-13 明确决定不轮换，不再作为本轮阻断；仓库与发行物继续禁止包含真实 Key |
-| 24 小时预发布长稳 | 发布环境待执行 | 本机 60 秒 Race Soak 已通过；正式标签前仍需预发布主机 24 小时窗口 |
+| 24 小时预发布长稳 | 已完成 | 仓库所有者确认本机 24 小时 Race 通过，并接受其作为本轮正式发布门槛证据 |
 
-当前仅 24 小时预发布长稳及其后的正式 Release Workflow 属于“发布环境待执行”；在真实完成前不得创建正式公开版本。
+全部发布前验证已经完成；允许创建正式标签，Release Workflow 的制品、签名、SBOM 和镜像结果将在执行后补录。
