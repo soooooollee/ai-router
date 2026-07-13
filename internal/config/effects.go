@@ -45,6 +45,8 @@ func CompareEffects(previous, next *Config) Effects {
 	hot(!reflect.DeepEqual(previous.Admin.AllowedHosts, next.Admin.AllowedHosts), "admin.allowed_hosts")
 	hot(previous.Logging.RequestHistory != next.Logging.RequestHistory, "logging.request_history")
 	hot(previous.Logging.CaptureBodies != next.Logging.CaptureBodies, "logging.capture_bodies")
+	hot(previous.Logging.Persist != next.Logging.Persist, "logging.persist")
+	hot(previous.Logging.WebRedaction != next.Logging.WebRedaction, "logging.web_redaction")
 	hot(previous.Logging.File != next.Logging.File, "logging.file")
 	hot(previous.Logging.Level != next.Logging.Level, "logging.level")
 	hot(!reflect.DeepEqual(previous.Metrics, next.Metrics), "metrics")

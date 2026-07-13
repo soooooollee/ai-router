@@ -19,7 +19,7 @@ AI Router 是一个精简的 AI 协议转换与模型路由网关。它以单个
 
 ```bash
 cp examples/airoute.minimal.yaml airoute.yaml
-export OPENAI_API_KEY="your-key"
+# 编辑 airoute.yaml，将 api_key 替换为实际密钥
 make build
 ./bin/airoute check --config airoute.yaml
 ./bin/airoute serve --config airoute.yaml
@@ -49,7 +49,7 @@ curl http://127.0.0.1:8080/v1/messages \
 
 配置模型别名后，客户端无需知道真实 Provider 或模型名称。完整配置见 [examples/airoute.full.yaml](examples/airoute.full.yaml)。
 
-Qwen 3.x、SiliconFlow 与 Xiaomi MiMo 示例见 [examples/airoute.qwen3.yaml](examples/airoute.qwen3.yaml)。Provider API Key 可直接保存在本机配置，也可写成 `${ENV_NAME}`；两种模式都会在模型列表中明确标识，管理 API 不返回密钥值。
+Qwen 3.x、SiliconFlow 与 Xiaomi MiMo 示例见 [examples/airoute.qwen3.yaml](examples/airoute.qwen3.yaml)。Provider API Key 直接保存在本机配置中，并会在模型接入和系统设置页面显示实际值；相关配置文件与备份使用 `0600` 权限。
 
 Claude Code 接入流程：先在“模型接入”完成 Provider 测试并保存，再在“路由配置”创建 Anthropic Messages 输出路由，最后进入“应用配置”选择该路由并写入。应用验证分为安装检测、配置同步、真实网关请求和可选的受控 CLI Smoke Test；CLI 参数由 Adapter 固定，不接受任意 Shell 命令。
 

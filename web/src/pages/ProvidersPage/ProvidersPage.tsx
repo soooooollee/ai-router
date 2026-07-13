@@ -10,8 +10,7 @@ import {
 } from "antd";
 import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
-import { TableViewTabs } from "../../components/TableViewTabs";
-import { WorkflowSteps } from "../../components/WorkflowSteps";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { protocolName } from "../../lib";
 import { ProviderDialog } from "./ProviderDialog";
 import type { Provider } from "../../types";
@@ -30,8 +29,9 @@ export function ProvidersPage({
   const [probing, setProbing] = useState("");
   const [result, setResult] = useState<Record<string, string>>({});
   const [editing, setEditing] = useState<string | null | undefined>(undefined);
+  const [pendingDelete, setPendingDelete] = useState<Provider | null>(null);
+  const [deleting, setDeleting] = useState(false);
   const [notice, noticeContext] = notification.useNotification();
-  const [view, setView] = useState<"all" | "connected" | "attention">("all");
   async function probe(id: string, testRequest = false) {
     setProbing(id);
     const provider = data.find((item) => item.id === id);
@@ -72,44 +72,55 @@ export function ProvidersPage({
       setProbing("");
     }
   }
-  async function remove(id: string) {
-    if (!confirm(`删除上游服务 ${id}？引用它的路由必须先移除。`)) return;
+  async function remove() {
+    if (!pendingDelete) return;
+    setDeleting(true);
     try {
       const doc = parse(yaml) || {};
-      doc.providers = (doc.providers || []).filter((p: any) => p.id !== id);
+      doc.providers = (doc.providers || []).filter(
+        (provider: any) => provider.id !== pendingDelete.id,
+      );
       const next = stringify(doc);
       const r = await api("/api/config", {
         method: "PUT",
         body: JSON.stringify({ yaml: next, expected_hash: hash }),
       });
       changed(next, r.hash);
+      setPendingDelete(null);
     } catch (e) {
-      alert((e as Error).message);
+      notice.error({
+        message: "删除模型服务失败",
+        description: (e as Error).message,
+        placement: "bottomRight",
+      });
+    } finally {
+      setDeleting(false);
     }
   }
-  const visibleProviders = data.filter((provider) => {
-    if (view === "connected") return provider.api_key_set;
-    if (view === "attention")
-      return !provider.api_key_set || provider.health?.ok === false;
-    return true;
-  });
   const columns: TableColumnsType<Provider> = [
     {
       title: "模型服务",
       key: "service",
-      width: 250,
+      width: 175,
       render: (_, provider) => (
         <div className="provider-identity table-provider-identity">
           <h3>{provider.name || provider.id}</h3>
-          <Tag>{protocolName(provider.protocol)}</Tag>
+          <span>{provider.id}</span>
         </div>
       ),
+    },
+    {
+      title: "协议",
+      dataIndex: "protocol",
+      key: "protocol",
+      width: 140,
+      render: (value: string) => <Tag>{protocolName(value)}</Tag>,
     },
     {
       title: "API 地址",
       dataIndex: "base_url",
       key: "base_url",
-      width: 250,
+      width: 200,
       ellipsis: true,
       className: "provider-api-column",
       render: (value: string) => (
@@ -121,7 +132,7 @@ export function ProvidersPage({
     {
       title: "模型",
       key: "models",
-      width: 190,
+      width: 145,
       ellipsis: true,
       className: "provider-model-column",
       render: (_, provider) => (
@@ -136,44 +147,22 @@ export function ProvidersPage({
       ),
     },
     {
-      title: "密钥",
+      title: "API Key",
       key: "status",
-      width: 110,
-      align: "center",
+      width: 160,
       className: "provider-status-column",
       render: (_, provider) => (
-        <Tooltip
-          title={
-            provider.key_storage === "environment"
-              ? `由环境变量 ${provider.key_reference} 提供${provider.health?.ok ? ` · ${provider.health.latency_ms || 0} ms` : ""}`
-              : provider.key_storage === "plaintext"
-                ? "密钥以明文保存在本地 0600 配置及备份中"
-                : "尚未设置密钥"
-          }
-        >
-          <Tag
-            color={
-              provider.key_storage === "environment"
-                ? "success"
-                : provider.api_key_set
-                  ? "warning"
-                  : "error"
-            }
-          >
-            {provider.key_storage === "environment"
-              ? "环境变量"
-              : provider.api_key_set
-                ? "本地明文"
-                : "缺少密钥"}
-          </Tag>
+        <Tooltip title={provider.api_key || "尚未设置密钥"} placement="topLeft">
+          <code className="table-code table-ellipsis provider-key-value">
+            {provider.api_key || "未设置"}
+          </code>
         </Tooltip>
       ),
     },
     {
       title: "操作",
       key: "actions",
-      width: 174,
-      align: "right",
+      width: 190,
       fixed: "right",
       render: (_, provider) => (
         <Space size={6} wrap={false}>
@@ -188,7 +177,7 @@ export function ProvidersPage({
           <AntButton size="small" onClick={() => setEditing(provider.id)}>
             编辑
           </AntButton>
-          <AntButton size="small" danger onClick={() => remove(provider.id)}>
+          <AntButton size="small" danger onClick={() => setPendingDelete(provider)}>
             删除
           </AntButton>
         </Space>
@@ -198,41 +187,27 @@ export function ProvidersPage({
   return (
     <>
       {noticeContext}
-      <WorkflowSteps active={1} />
       <section className="data-panel">
         <div className="toolbar">
           <div>
-            <b>模型列表</b>
+            <h2>模型列表</h2>
             <p>填写 API 地址、密钥和模型名；测试成功后自动识别协议并录入。</p>
           </div>
           <button className="primary" onClick={() => setEditing(null)}>
             + 接入模型
           </button>
         </div>
-        <TableViewTabs
-          value={view}
-          onChange={setView}
-          items={[
-            { value: "all", label: "全部" },
-            { value: "connected", label: "已连接" },
-            { value: "attention", label: "需处理" },
-          ]}
-        />
         <div className="antd-table-shell">
           <Table<Provider>
             className="airoute-data-table provider-data-table"
             columns={columns}
-            dataSource={visibleProviders}
+            dataSource={data}
             rowKey="id"
             pagination={false}
             tableLayout="fixed"
-            scroll={{ x: 950 }}
+            scroll={{ x: 1010 }}
             locale={{ emptyText: "还没有接入模型" }}
-            footer={() =>
-              view === "all"
-                ? `共 ${data.length} 个模型服务`
-                : `筛选结果 ${visibleProviders.length} 个 · 全部 ${data.length} 个`
-            }
+            footer={() => `共 ${data.length} 个模型服务`}
           />
         </div>
       </section>
@@ -245,6 +220,16 @@ export function ProvidersPage({
           saved={changed}
         />
       )}
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="删除模型服务？"
+        description={<>将删除 <b>{pendingDelete?.name || pendingDelete?.id}</b>。如果路由仍在使用该服务，需要先删除或修改对应路由。</>}
+        confirmLabel="删除模型服务"
+        danger
+        busy={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={remove}
+      />
     </>
   );
 }

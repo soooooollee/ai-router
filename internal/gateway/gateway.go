@@ -15,6 +15,7 @@ import (
 	mathrand "math/rand/v2"
 	"net/http"
 	"net/url"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -52,12 +53,14 @@ type Gateway struct {
 var errLossyConversion = errors.New("request requires a lossy protocol conversion")
 
 func New(c *config.Store, r *protocol.Registry, logs *observe.Store, metrics *observe.Metrics, logger *slog.Logger) *Gateway {
-	maxConcurrent := c.Get().Server.MaxConcurrent
+	current := c.Get()
+	maxConcurrent := current.Server.MaxConcurrent
 	if maxConcurrent < 1 {
 		maxConcurrent = 256
 	}
 	standard, restricted := runtimeClients(maxConcurrent)
 	g := &Gateway{Config: c, Registry: r, Logs: logs, Metrics: metrics, Client: standard, RestrictedClient: restricted, Logger: logger, sem: make(chan struct{}, maxConcurrent)}
+	g.Logs.Configure(current.Logging.RequestHistory, effectiveLogFile(current))
 	g.enabled.Store(true)
 	return g
 }
@@ -77,6 +80,7 @@ func (g *Gateway) ApplyRuntimeConfig(previous, next *config.Config) {
 	if previous == nil || next == nil {
 		return
 	}
+	g.Logs.Configure(next.Logging.RequestHistory, effectiveLogFile(next))
 	if g.levelController != nil && previous.Logging.Level != next.Logging.Level {
 		g.levelController.Set(logLevel(next.Logging.Level))
 	}
@@ -97,6 +101,20 @@ func (g *Gateway) ApplyRuntimeConfig(previous, next *config.Config) {
 	g.clientMu.Unlock()
 	oldStandard.CloseIdleConnections()
 	oldRestricted.CloseIdleConnections()
+}
+
+func effectiveLogFile(c *config.Config) string {
+	if c == nil || !c.Logging.Persist {
+		return ""
+	}
+	if strings.TrimSpace(c.Logging.File) != "" {
+		return c.Logging.File
+	}
+	base := "."
+	if strings.TrimSpace(c.SourcePath) != "" {
+		base = filepath.Dir(c.SourcePath)
+	}
+	return filepath.Join(base, "airoute-requests.jsonl")
 }
 
 func (g *Gateway) SetLogLevelController(controller *slog.LevelVar) {
@@ -236,6 +254,7 @@ func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.
 		errorOut(w, ir.Anthropic, 400, "invalid_request", err.Error(), id)
 		return
 	}
+	req.Model = decodeClaudeAppRouteModel(req.Model)
 	headers := map[string]string{}
 	for key, values := range r.Header {
 		if len(values) > 0 {
@@ -330,7 +349,7 @@ func (g *Gateway) nativeTokenCount(ctx context.Context, request *ir.Request, tar
 
 func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Config, clientProtocol ir.Protocol, pathModel, id, clientKeyID string) {
 	start := time.Now()
-	g.Logs.Configure(c.Logging.RequestHistory, c.Logging.File)
+	g.Logs.Configure(c.Logging.RequestHistory, effectiveLogFile(c))
 	g.Metrics.Requests.Add(1)
 	g.Metrics.InFlight.Add(1)
 	record := observe.Record{ID: id, StartedAt: start, ClientProtocol: clientProtocol, ClientKeyID: clientKeyID, ConfigVersion: c.Hash}
@@ -375,7 +394,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		body = injectGemini(body, pathModel, strings.Contains(r.URL.Path, "streamGenerateContent"))
 	}
 	if c.Logging.CaptureBodies {
-		record.RequestBody = redactBody(body)
+		record.RequestBody = string(body)
 	}
 	inAdapter, err := g.Registry.Get(clientProtocol)
 	if err != nil {
@@ -393,6 +412,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	}
 	canonical.ID = id
 	record.RequestedModel = canonical.Model
+	canonical.Model = decodeClaudeAppRouteModel(canonical.Model)
 	record.Diagnostics = append(record.Diagnostics, diagnostics...)
 	if c.Conversion.RemoteImagePolicy == "reject" && common.HasType(canonical, "image_url") {
 		record.Status = 422
@@ -536,6 +556,14 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		}
 	}
 	if finalErr != nil || upstream == nil {
+		if target.Provider.ID != "" {
+			record.ProviderID = target.Provider.ID
+			record.UpstreamProtocol = target.Provider.Protocol
+			record.ResolvedModel = target.Model
+		}
+		if c.Logging.CaptureBodies && len(finalBody) > 0 {
+			record.ResponseBody = string(finalBody)
+		}
 		if errors.Is(finalErr, errLossyConversion) {
 			record.Status = 422
 			record.ErrorCode = "protocol_conversion_error"
@@ -563,13 +591,13 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		w.Header().Add("x-airoute-diagnostic", d.Code)
 	}
 	if canonical.Stream {
-		g.stream(w, r.Context(), upstream, streamDecoder, prefetched, clientProtocol, target.Provider.Protocol, target.Model, id, &record)
+		g.stream(w, r.Context(), upstream, streamDecoder, prefetched, clientProtocol, target.Provider.Protocol, target.Model, id, c.Logging.CaptureBodies, &record)
 		return
 	}
 	rawResp, err := io.ReadAll(io.LimitReader(upstream.Body, c.Server.MaxBodySize))
 	upstream.Body.Close()
 	if c.Logging.CaptureBodies {
-		record.ResponseBody = redactBody(rawResp)
+		record.ResponseBody = string(rawResp)
 	}
 	if err != nil {
 		record.Status = 502
@@ -609,6 +637,21 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(upstream.StatusCode)
 	_, _ = w.Write(encoded)
+}
+
+// Claude App only accepts Claude-shaped model identifiers in its discovery
+// profile. The application adapter encodes the real AI Router alias as hex so
+// the gateway can restore it before normal route matching.
+func decodeClaudeAppRouteModel(model string) string {
+	const prefix = "anthropic/claude-ccr-h"
+	if !strings.HasPrefix(strings.ToLower(model), prefix) {
+		return model
+	}
+	decoded, err := hex.DecodeString(model[len(prefix):])
+	if err != nil || len(decoded) == 0 {
+		return model
+	}
+	return string(decoded)
 }
 
 func (g *Gateway) do(ctx context.Context, p config.Provider, payload []byte, stream bool, model string) (*http.Response, error) {
@@ -668,7 +711,7 @@ type cancelBody struct {
 
 func (c *cancelBody) Close() error { e := c.ReadCloser.Close(); c.cancel(); return e }
 
-func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.Response, dec *streaming.Decoder, prefetched []streaming.Event, clientProtocol, providerProtocol ir.Protocol, model, id string, record *observe.Record) {
+func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.Response, dec *streaming.Decoder, prefetched []streaming.Event, clientProtocol, providerProtocol ir.Protocol, model, id string, captureBody bool, record *observe.Record) {
 	defer resp.Body.Close()
 	decoderAdapter, _ := g.Registry.Get(providerProtocol)
 	encoderAdapter, _ := g.Registry.Get(clientProtocol)
@@ -687,6 +730,15 @@ func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.
 	sequence := 0
 	normalizer := ir.NewStreamNormalizer()
 	var lastUsage *ir.Usage
+	capturedEvents := make([]ir.Event, 0, 64)
+	capturedBytes := 0
+	captureTruncated := false
+	if captureBody {
+		defer func() {
+			payload, _ := json.Marshal(map[string]any{"stream": true, "truncated": captureTruncated, "events": capturedEvents})
+			record.ResponseBody = string(payload)
+		}()
+	}
 	for eventIndex := 0; ; eventIndex++ {
 		var se streaming.Event
 		var err error
@@ -732,6 +784,15 @@ func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.
 			for _, normalized := range normalizer.Push(event) {
 				sequence++
 				normalized.Sequence = sequence
+				if captureBody {
+					eventSize := len(normalized.Delta) + len(normalized.Arguments) + len(normalized.Raw) + 128
+					if capturedBytes+eventSize <= 1<<20 {
+						capturedEvents = append(capturedEvents, normalized)
+						capturedBytes += eventSize
+					} else {
+						captureTruncated = true
+					}
+				}
 				if normalized.Type == "response.end" && normalized.Usage == nil {
 					normalized.Usage = lastUsage
 				}
@@ -1028,36 +1089,6 @@ func normalizeUpstreamError(status int, body []byte, e error) (int, string, stri
 		return 502, "upstream_unavailable", message
 	}
 }
-func redactBody(b []byte) string {
-	if len(b) > 16<<10 {
-		b = b[:16<<10]
-	}
-	var v any
-	if json.Unmarshal(b, &v) != nil {
-		return redactSnippet(b)
-	}
-	redactValue(v)
-	out, _ := json.Marshal(v)
-	return string(out)
-}
-func redactValue(v any) {
-	switch x := v.(type) {
-	case map[string]any:
-		for k, val := range x {
-			n := strings.ToLower(k)
-			if strings.Contains(n, "key") || strings.Contains(n, "token") || strings.Contains(n, "secret") || strings.Contains(n, "authorization") || strings.Contains(n, "cookie") {
-				x[k] = "[REDACTED]"
-			} else {
-				redactValue(val)
-			}
-		}
-	case []any:
-		for _, val := range x {
-			redactValue(val)
-		}
-	}
-}
-
 func errorOut(w http.ResponseWriter, p ir.Protocol, status int, typ, message, id string) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("x-airoute-request-id", id)

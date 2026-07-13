@@ -422,3 +422,60 @@ nav button.active{color:#0f3f8c;box-shadow:none;background:#eef6ff}
 .application-config-path{width:100%;min-width:0;max-width:none}
 .application-save-bar .primary{width:100%}
 }
+
+/* 2026 interface refresh: consistent local-console typography and data density */
+main{padding-top:22px}
+.workflow-steps{margin-bottom:22px}
+.data-panel .toolbar h2{color:#172033;letter-spacing:-.015em;margin:0;font-size:18px;line-height:1.25}
+.antd-table-shell{margin:0}
+.airoute-data-table .ant-table-container{border:0;border-radius:0;box-shadow:none}
+.airoute-data-table .ant-table-thead>tr>th{color:#4d596b;text-align:left!important;background:#f5f7fa;border-top:1px solid #dfe5ed;border-bottom:1px solid #dfe5ed;height:46px;padding:10px 16px;font-size:12px;font-weight:700}
+.airoute-data-table .ant-table-tbody>tr>td{color:#253044;border-bottom:1px solid #e4e9ef;height:54px;padding:10px 16px;font-size:12px;font-weight:400}
+.airoute-data-table .ant-table-thead>tr>th:not(:last-child),.airoute-data-table .ant-table-tbody>tr>td:not(:last-child){border-right:0}
+.airoute-data-table .ant-table-cell-fix-right,.airoute-data-table .ant-table-cell-fix-end{box-shadow:none}
+.airoute-data-table .ant-table-footer{border-top:0;padding:13px 16px;font-size:11px}
+.table-provider-identity{align-items:flex-start;flex-direction:column;gap:3px}
+.table-provider-identity h3,.table-route-name b{font-size:12px;font-weight:650}
+.table-provider-identity>span{color:#8791a0;font-size:10px}
+.provider-key-value{color:#263f70;font-size:11px}
+.provider-status-column{background:#fbfcfe!important}
+.route-data-table .ant-table-tbody>tr>td,.provider-data-table .ant-table-tbody>tr>td{background:#fff}
+
+.application-config-workbench{grid-template-columns:270px minmax(0,1fr);min-height:700px}
+.application-list-item{grid-template-columns:minmax(0,1fr) auto;min-height:72px;padding:14px}
+.application-list-copy{gap:6px}
+.application-list-copy b{font-size:12px}
+.application-list-copy small{font-size:10px;line-height:1.45}
+.application-supported{font-size:9px;padding:4px 7px}
+.application-detail-header{min-height:106px;padding:20px 24px}
+.application-detail-title h3{font-size:17px}
+.application-detail-title span{font-size:9px}
+.application-detail-identity p{font-size:11px;line-height:1.5}
+.application-config-path{min-width:310px;max-width:440px;padding:12px 14px}
+.application-config-path>span,.application-config-path code{font-size:10px}
+.application-config-path small{font-size:9px}
+.application-config-body{grid-template-columns:minmax(520px,1.2fr) minmax(360px,.8fr);gap:18px;padding:24px}
+.application-form-section{padding:24px}
+.application-section-title b{font-size:13px}
+.application-section-title div span{font-size:10px}
+.application-connection-fields,.application-role-grid{gap:14px}
+.application-connection-fields label,.application-role-grid label{gap:8px;font-size:11px}
+.application-connection-fields input,.application-role-grid select{height:42px;padding:0 12px;font-size:12px}
+.application-preview-header b{font-size:12px}
+.application-preview-header span,.application-preview-footer{font-size:10px}
+.application-preview-panel pre{min-height:390px;font-size:11px}
+
+.settings-context-panel{padding:20px 14px}
+.settings-sheet-list{flex:1;flex-direction:column;gap:5px;margin-top:14px;display:flex;overflow-y:auto}
+.settings-sheet-list button{color:#536176;text-align:left;cursor:pointer;background:transparent;border:1px solid transparent;border-radius:9px;grid-template-columns:18px minmax(0,1fr);align-items:center;gap:9px;width:100%;min-height:50px;padding:8px 10px;display:grid}
+.settings-sheet-list button:hover{background:#fff;border-color:#dce4ee}
+.settings-sheet-list button.active{color:#1e5fae;background:#fff;border-color:#c9d9ec;box-shadow:0 3px 10px #1e304d0a}
+.settings-sheet-list button>span:last-child{flex-direction:column;gap:3px;min-width:0;display:flex}
+.settings-sheet-list button b{color:inherit;font-size:11px}
+.settings-sheet-list button small{color:#8792a3;text-overflow:ellipsis;white-space:nowrap;font-size:9px;overflow:hidden}
+.settings-sheet-list svg{color:#2d6fc7}
+.settings-sheet-dot{background:#aab6c5;border-radius:50%;width:7px;height:7px;margin-left:4px}
+.settings-sheet-list button.active .settings-sheet-dot{background:#2d6fc7;box-shadow:0 0 0 4px #2d6fc719}
+.settings-json-editor{font-size:11px}
+@media (width<=1180px){.application-config-body{grid-template-columns:1fr}.application-preview-panel pre{min-height:250px}}
+@media (width<=720px){.settings-sheet-list{flex-flow:row;overflow-x:auto}.settings-sheet-list button{flex:0 0 180px}.settings-context-panel{padding-bottom:14px}}

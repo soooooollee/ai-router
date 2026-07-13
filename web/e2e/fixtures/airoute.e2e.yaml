@@ -43,6 +43,9 @@ conversion:
 logging:
   level: info
   request_history: 500
+  capture_bodies: true
+  persist: false
+  web_redaction: false
 
 metrics:
   enabled: true
