@@ -20,6 +20,10 @@ jobs:
         working-directory: web
       - run: npm run test
         working-directory: web
+      - run: npx playwright install --with-deps chromium
+        working-directory: web
+      - run: npm run test:e2e
+        working-directory: web
       - run: go test -race ./...
       - run: go vet ./...
       - run: go build ./cmd/airoute
@@ -33,10 +37,6 @@ jobs:
           --excludePackages 'airoute-web@0.1.0'
           --onlyAllow 'MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;BlueOak-1.0.0;CC-BY-4.0;Python-2.0'
           --summary
-        working-directory: web
-      - run: npx playwright install --with-deps chromium
-        working-directory: web
-      - run: npm run test:e2e
         working-directory: web
   platform-smoke:
     strategy:
