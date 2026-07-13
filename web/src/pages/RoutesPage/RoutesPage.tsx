@@ -5,15 +5,15 @@ import {
   Table,
   Tag,
   Tooltip,
+  notification,
   type TableColumnsType,
 } from "antd";
 import { Save } from "lucide-react";
 import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
-import { TableViewTabs } from "../../components/TableViewTabs";
-import { WorkflowSteps } from "../../components/WorkflowSteps";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { protocolName } from "../../lib";
-import type { Provider, RouteConfig, RouteTableRow } from "../../types";
+import type { Provider, RouteConfig } from "../../types";
 
 function routeAddress(gateway: string, protocol: string, model: string) {
   const root = gateway.replace(/\/$/, "");
@@ -31,7 +31,6 @@ function routeAddress(gateway: string, protocol: string, model: string) {
 
 export function RoutesPage({
   data,
-  fallback,
   providers,
   gateway,
   yaml,
@@ -39,7 +38,6 @@ export function RoutesPage({
   changed,
 }: {
   data: RouteConfig[];
-  fallback: { provider: string; model: string }[];
   providers: Provider[];
   gateway: string;
   yaml: string;
@@ -47,11 +45,18 @@ export function RoutesPage({
   changed: (y: string, h: string) => void;
 }) {
   const [editing, setEditing] = useState<string | null | undefined>(undefined);
-  const [view, setView] = useState<"all" | "rules" | "fallback">("all");
-  async function remove(id: string) {
-    if (!confirm(`删除路由 ${id}？`)) return;
+  const [pendingDelete, setPendingDelete] = useState<RouteConfig | null>(null);
+  const [deleting, setDeleting] = useState(false);
+  const [notice, noticeContext] = notification.useNotification();
+  const providerName = (id: string) =>
+    providers.find((provider) => provider.id === id)?.name || id;
+  async function remove() {
+    if (!pendingDelete) return;
+    setDeleting(true);
     const doc = parse(yaml) || {};
-    doc.routes = (doc.routes || []).filter((r: any) => r.id !== id);
+    doc.routes = (doc.routes || []).filter(
+      (route: any) => route.id !== pendingDelete.id,
+    );
     const next = stringify(doc);
     try {
       const r = await api("/api/config", {
@@ -59,86 +64,44 @@ export function RoutesPage({
         body: JSON.stringify({ yaml: next, expected_hash: hash }),
       });
       changed(next, r.hash);
+      setPendingDelete(null);
     } catch (e) {
-      alert((e as Error).message);
+      notice.error({
+        message: "删除路由失败",
+        description: (e as Error).message,
+        placement: "bottomRight",
+      });
+    } finally {
+      setDeleting(false);
     }
   }
-  const rows: RouteTableRow[] = [
-    ...data.map((route, index) => ({
-      ...route,
-      key: route.id,
-      order: String(index + 1).padStart(2, "0"),
-    })),
+  const columns: TableColumnsType<RouteConfig> = [
     {
-      key: "__fallback__",
-      order: "↳",
-      id: "默认路由",
-      priority: 0,
-      match: {},
-      targets: fallback,
-      fallback: true,
-    },
-  ];
-  const visibleRows = rows.filter((route) => {
-    if (view === "rules") return !route.fallback;
-    if (view === "fallback") return route.fallback;
-    return true;
-  });
-  const columns: TableColumnsType<RouteTableRow> = [
-    {
-      title: "序号",
-      dataIndex: "order",
-      key: "order",
-      width: 66,
-      render: (value: string) => <span className="route-order">{value}</span>,
-    },
-    {
-      title: "路由名称",
+      title: "客户端模型名",
       key: "name",
-      width: 170,
+      width: 190,
       render: (_, route) => (
         <div className="table-route-name">
-          <b>{route.id}</b>
-          <span>
-            {route.fallback ? "兜底路由" : `优先级 ${route.priority}`}
-          </span>
+          <b>{route.match.model || "所有模型"}</b>
         </div>
       ),
     },
     {
-      title: "匹配条件",
-      key: "match",
-      width: 210,
-      className: "route-match-column",
-      render: (_, route) => (
-        <div className="table-route-match">
-          <code>
-            {route.fallback
-              ? "没有其他规则命中"
-              : `model = ${route.match.model || "*"}`}
-          </code>
-          {route.match.protocol && (
-            <Tag>{protocolName(route.match.protocol)}</Tag>
-          )}
-        </div>
-      ),
-    },
-    {
-      title: "目标模型",
+      title: "转发到上游模型",
       key: "target",
-      width: 260,
+      width: 280,
       ellipsis: true,
       render: (_, route) => (
         <Tooltip
           title={route.targets
-            .map((target) => `${target.provider} / ${target.model}`)
+            .map((target) => `${providerName(target.provider)} / ${target.model}`)
             .join("\n")}
           placement="topLeft"
         >
           <div className="table-route-target">
             {route.targets.map((target, index) => (
               <code key={`${target.provider}-${target.model}-${index}`}>
-                {target.provider} / {target.model}
+                {providerName(target.provider)} / {target.model}
               </code>
             ))}
           </div>
@@ -146,14 +109,21 @@ export function RoutesPage({
       ),
     },
     {
+      title: "客户端协议",
+      key: "protocol",
+      width: 160,
+      render: (_, route) => (
+        <Tag>{route.match.protocol ? protocolName(route.match.protocol) : "所有兼容协议"}</Tag>
+      ),
+    },
+    {
       title: "调用地址",
       key: "address",
+      width: 310,
       ellipsis: true,
       className: "route-address-column",
       render: (_, route) => {
-        const address = route.fallback
-          ? gateway
-          : route.match.protocol
+        const address = route.match.protocol
             ? routeAddress(
                 gateway,
                 route.match.protocol,
@@ -170,64 +140,43 @@ export function RoutesPage({
     {
       title: "操作",
       key: "actions",
-      width: 112,
-      align: "right",
+      width: 140,
       fixed: "right",
       render: (_, route) =>
-        route.fallback ? (
-          <span className="muted-table-text">—</span>
-        ) : (
-          <Space size={6} wrap={false}>
+        <Space size={6} wrap={false}>
             <AntButton size="small" onClick={() => setEditing(route.id)}>
               编辑
             </AntButton>
-            <AntButton size="small" danger onClick={() => remove(route.id)}>
+            <AntButton size="small" danger onClick={() => setPendingDelete(route)}>
               删除
             </AntButton>
-          </Space>
-        ),
+          </Space>,
     },
   ];
   return (
     <>
-      <WorkflowSteps active={2} />
+      {noticeContext}
       <section className="data-panel">
         <div className="toolbar">
           <div>
-            <b>路由列表</b>
-            <p>选择已接入模型和输出协议，系统会生成可以直接使用的路由地址。</p>
+            <h2>路由列表</h2>
+            <p>客户端使用一个简单模型名发起请求，AI Router 再将请求转发到指定的上游模型。</p>
           </div>
           <button className="primary" onClick={() => setEditing(null)}>
             + 添加路由
           </button>
         </div>
-        <TableViewTabs
-          value={view}
-          onChange={setView}
-          items={[
-            { value: "all", label: "全部" },
-            { value: "rules", label: "模型路由" },
-            { value: "fallback", label: "默认路由" },
-          ]}
-        />
         <div className="antd-table-shell">
-          <Table<RouteTableRow>
+          <Table<RouteConfig>
             className="airoute-data-table route-data-table"
             columns={columns}
-            dataSource={visibleRows}
-            rowKey="key"
+            dataSource={data}
+            rowKey="id"
             pagination={false}
             tableLayout="fixed"
-            scroll={{ x: 1040 }}
+            scroll={{ x: 1080 }}
             locale={{ emptyText: "还没有配置路由" }}
-            rowClassName={(route) =>
-              route.fallback ? "fallback-table-row" : ""
-            }
-            footer={() =>
-              view === "all"
-                ? `共 ${data.length} 条模型路由 · 1 条默认路由`
-                : `筛选结果 ${visibleRows.length} 条`
-            }
+            footer={() => `共 ${data.length} 条模型路由`}
           />
         </div>
       </section>
@@ -242,6 +191,16 @@ export function RoutesPage({
           saved={changed}
         />
       )}
+      <ConfirmDialog
+        open={Boolean(pendingDelete)}
+        title="删除路由？"
+        description={<>将删除客户端模型路由 <b>{pendingDelete?.match.model || pendingDelete?.id}</b>，使用该模型名的请求将不再匹配这条规则。</>}
+        confirmLabel="删除路由"
+        danger
+        busy={deleting}
+        onCancel={() => setPendingDelete(null)}
+        onConfirm={remove}
+      />
     </>
   );
 }
@@ -265,7 +224,6 @@ function RouteDialog({
   const raw = (parse(yaml)?.routes || []).find((r: any) => r.id === existing);
   const [form, setForm] = useState({
     id: raw?.id || "",
-    priority: String(raw?.priority ?? 100),
     model: raw?.match?.model || "",
     protocol: raw?.match?.protocol || "anthropic-messages",
     stream: raw?.match?.stream === undefined ? "any" : String(raw.match.stream),
@@ -309,7 +267,7 @@ function RouteDialog({
       const value = {
         ...raw,
         id: form.id,
-        priority: Number(form.priority),
+        priority: raw?.priority ?? 100,
         match,
         targets,
       };
@@ -340,9 +298,13 @@ function RouteDialog({
           <button onClick={close}>×</button>
         </div>
         {error && <div className="notice error">{error}</div>}
+        <div className="route-help-box">
+          <b>路由就是一条模型映射规则</b>
+          <span>客户端模型名（例如 qwen3） → 实际上游服务与模型</span>
+        </div>
         <div className="route-wizard-fields">
           <label>
-            选择已接入模型
+            目标上游模型
             <select
               aria-label="选择接入模型"
               value={form.targets.split(",")[0].trim()}
@@ -376,9 +338,9 @@ function RouteDialog({
             </select>
           </label>
           <label>
-            路由模型名
+            客户端模型名（别名）
             <input
-              aria-label="路由模型名"
+              aria-label="客户端模型名"
               placeholder="例如 coding-model"
               value={form.model}
               onChange={(e) =>
@@ -391,9 +353,9 @@ function RouteDialog({
             />
           </label>
           <label>
-            输出协议
+            客户端调用协议
             <select
-              aria-label="输出协议"
+              aria-label="客户端调用协议"
               value={form.protocol}
               onChange={(e) => setForm({ ...form, protocol: e.target.value })}
             >
@@ -406,11 +368,11 @@ function RouteDialog({
         </div>
         <div className="generated-route-address">
           <div>
-            <small>路由后的调用地址</small>
+            <small>客户端调用地址</small>
             <code>{routeAddress(gateway, form.protocol, form.model)}</code>
           </div>
           <span>
-            模型参数填写 <b>{form.model || "模型名"}</b>
+            请求中的 model 填写 <b>{form.model || "模型名"}</b>，系统会自动转发到上方选择的模型。
           </span>
         </div>
         <details className="advanced-settings">
@@ -421,14 +383,6 @@ function RouteDialog({
               <input
                 value={form.id}
                 onChange={(e) => setForm({ ...form, id: e.target.value })}
-              />
-            </label>
-            <label>
-              优先级
-              <input
-                type="number"
-                value={form.priority}
-                onChange={(e) => setForm({ ...form, priority: e.target.value })}
               />
             </label>
             {(["stream", "tools", "image"] as const).map((key) => (

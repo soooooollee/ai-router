@@ -1,83 +1,104 @@
-version: 1
-
-server:
-  listen: 127.0.0.1:8080
-  admin_listen: 127.0.0.1:8081
-  request_timeout: 10m
-
 admin:
-  enabled: true
-
+    enabled: true
 auth:
-  enabled: false
-
-providers:
-  - id: siliconflow-qwen3
-    name: SiliconFlow Qwen 3.x
-    profile: qwen3
-    reasoning_mode: disabled
-    max_output_tokens: 1024
-    protocol: openai-chat
-    base_url: https://api.siliconflow.cn/v1
-    api_key: ${SILICONFLOW_API_KEY}
-    models: [Qwen/Qwen3.6-35B-A3B]
-    timeout: 5m
-
-  - id: xiaomi-mimo-openai
-    name: Xiaomi MiMo (OpenAI)
-    profile: xiaomi-mimo
-    protocol: openai-chat
-    base_url: https://api.xiaomimimo.com/v1
-    api_key: ${MIMO_API_KEY}
-    models: [mimo-v2.5]
-    timeout: 5m
-
-  - id: xiaomi-mimo-anthropic
-    name: Xiaomi MiMo (Anthropic)
-    profile: xiaomi-mimo
-    protocol: anthropic-messages
-    base_url: https://api.xiaomimimo.com/anthropic
-    api_key: ${MIMO_API_KEY}
-    models: [mimo-v2.5]
-    timeout: 5m
-
-routes:
-  - id: qwen3
-    priority: 100
-    match: {model: qwen3}
-    targets:
-      - {provider: siliconflow-qwen3, model: Qwen/Qwen3.6-35B-A3B}
-
-  - id: mimo-openai
-    priority: 100
-    match: {model: mimo}
-    targets:
-      - {provider: xiaomi-mimo-openai, model: mimo-v2.5}
-
-  - id: mimo-anthropic
-    priority: 100
-    match: {model: mimo-anthropic}
-    targets:
-      - {provider: xiaomi-mimo-anthropic, model: mimo-v2.5}
-
-default_route:
-  targets:
-    - {provider: siliconflow-qwen3, model: Qwen/Qwen3.6-35B-A3B}
-
+    enabled: false
 conversion:
-  unsupported_fields: warn
-  preserve_extensions: true
-
-retry:
-  max_attempts: 2
-  base_delay: 500ms
-  max_delay: 5s
-  on_status: [429, 500, 502, 503, 504]
-
+    preserve_extensions: true
+    unsupported_fields: warn
+default_route:
+    targets:
+        - model: Qwen/Qwen3.6-35B-A3B
+          provider: siliconflow-qwen3
 logging:
-  level: info
-  request_history: 500
-
+    capture_bodies: true
+    level: info
+    persist: false
+    request_history: 500
+    web_redaction: false
 metrics:
-  enabled: true
-  path: /metrics
+    enabled: true
+    path: /metrics
+providers:
+    - allow_private_url: false
+      api_key: sk-your-siliconflow-api-key
+      base_url: https://api.siliconflow.cn/v1
+      dynamic_models: false
+      id: siliconflow-qwen3
+      max_output_tokens: 1024
+      models:
+        - Qwen/Qwen3.6-35B-A3B
+      name: SiliconFlow Qwen 3.x
+      profile: qwen3
+      protocol: openai-chat
+      reasoning_mode: disabled
+      timeout: 5m
+    - allow_private_url: false
+      api_key: sk-your-xiaomi-api-key
+      base_url: https://api.xiaomimimo.com/v1
+      dynamic_models: false
+      id: xiaomi-mimo-openai
+      models:
+        - mimo-v2.5
+      name: Xiaomi MiMo (OpenAI)
+      profile: xiaomi-mimo
+      protocol: openai-chat
+      reasoning_mode: auto
+      timeout: 5m
+    - allow_private_url: false
+      api_key: sk-your-xiaomi-api-key
+      base_url: https://api.xiaomimimo.com/anthropic
+      dynamic_models: false
+      id: xiaomi-mimo-anthropic
+      models:
+        - mimo-v2.5
+        - mimo-v2.5-pro
+      name: Xiaomi MiMo (Anthropic)
+      profile: xiaomi-mimo
+      protocol: anthropic-messages
+      reasoning_mode: auto
+      timeout: 5m
+retry:
+    base_delay: 500ms
+    max_attempts: 2
+    max_delay: 5s
+    on_status:
+        - 429
+        - 500
+        - 502
+        - 503
+        - 504
+routes:
+    - id: qwen3
+      match:
+        model: qwen3
+      priority: 100
+      targets:
+        - model: Qwen/Qwen3.6-35B-A3B
+          provider: siliconflow-qwen3
+    - id: mimo-openai
+      match:
+        model: mimo
+      priority: 100
+      targets:
+        - model: mimo-v2.5
+          provider: xiaomi-mimo-openai
+    - id: mimo-anthropic
+      match:
+        model: mimo-anthropic
+      priority: 100
+      targets:
+        - model: mimo-v2.5
+          provider: xiaomi-mimo-anthropic
+    - id: mimo-v2.5-pro
+      match:
+        model: mimo-v2.5-pro
+        protocol: anthropic-messages
+      priority: 100
+      targets:
+        - model: mimo-v2.5-pro
+          provider: xiaomi-mimo-anthropic
+server:
+    admin_listen: 127.0.0.1:8081
+    listen: 127.0.0.1:8080
+    request_timeout: 10m
+version: 1

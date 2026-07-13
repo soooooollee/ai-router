@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { Braces, Check, RefreshCw, Save, ShieldCheck } from "lucide-react";
 import { api } from "../../app/api";
-import { WorkflowSteps } from "../../components/WorkflowSteps";
+import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { ApplicationResults } from "./ApplicationResults";
 import type {
   AppConfig,
@@ -32,6 +32,7 @@ export function ApplicationsPage({
     [config],
   );
   const fallback = aliases[0] || "";
+  const webRedaction = Boolean(config?.logging?.web_redaction);
   const gateway = status?.gateway_url || "http://127.0.0.1:8080";
   const [apps, setApps] = useState<ApplicationListItem[]>([]);
   const [selectedID, setSelectedID] = useState("claude-code");
@@ -52,6 +53,9 @@ export function ApplicationsPage({
   });
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
+  const [confirmation, setConfirmation] = useState<
+    { kind: "cli" } | { kind: "rollback"; backup: ApplicationBackup } | null
+  >(null);
 
   const selectedApp = apps.find((item) => item.manifest.id === selectedID);
   const hasCapability = (capability: ApplicationCapability) =>
@@ -78,26 +82,33 @@ export function ApplicationsPage({
     ]);
     setAppState(state);
     setBackups(backupValue.backups || []);
-    if (selectedID === "claude-code") {
+    if (selectedID === "claude-code" || selectedID === "claude-app") {
       const managed = state.managed || {};
       const selected = (candidate: unknown) =>
         typeof candidate === "string" && aliases.includes(candidate)
           ? candidate
           : fallback;
+      const isDesktop = selectedID === "claude-app";
+      const read = (desktopKey: string, codeKey: string) =>
+        managed[isDesktop ? desktopKey : codeKey];
       setForm((current) => ({
-        ...current,
         base_url:
-          typeof managed.ANTHROPIC_BASE_URL === "string"
-            ? managed.ANTHROPIC_BASE_URL
+          typeof read("base_url", "ANTHROPIC_BASE_URL") === "string" &&
+          read("base_url", "ANTHROPIC_BASE_URL")
+            ? (read("base_url", "ANTHROPIC_BASE_URL") as string)
             : gateway,
-        api_key: managed.api_key_set ? "" : current.api_key,
-        model: selected(managed.ANTHROPIC_MODEL),
-        opus_model: selected(managed.ANTHROPIC_DEFAULT_OPUS_MODEL),
-        sonnet_model: selected(managed.ANTHROPIC_DEFAULT_SONNET_MODEL),
-        haiku_model: selected(managed.ANTHROPIC_DEFAULT_HAIKU_MODEL),
+        api_key:
+          typeof read("api_key", "ANTHROPIC_API_KEY") === "string" &&
+          read("api_key", "ANTHROPIC_API_KEY")
+            ? (read("api_key", "ANTHROPIC_API_KEY") as string)
+            : current.api_key || (config?.auth?.enabled ? "" : "airoute-local"),
+        model: selected(read("model", "ANTHROPIC_MODEL")),
+        opus_model: selected(read("opus_model", "ANTHROPIC_DEFAULT_OPUS_MODEL")),
+        sonnet_model: selected(read("sonnet_model", "ANTHROPIC_DEFAULT_SONNET_MODEL")),
+        haiku_model: selected(read("haiku_model", "ANTHROPIC_DEFAULT_HAIKU_MODEL")),
       }));
     }
-  }, [aliases, fallback, gateway, selectedID]);
+  }, [aliases, config?.auth?.enabled, fallback, gateway, selectedID]);
 
   useEffect(() => {
     loadApplications().catch((error) => setMessage((error as Error).message));
@@ -154,14 +165,6 @@ export function ApplicationsPage({
   }
 
   async function verify(runCLI: boolean) {
-    if (
-      runCLI &&
-      !window.confirm(
-        "完整验证会让 Claude Code 发起一次真实模型请求，可能产生少量费用。继续吗？",
-      )
-    ) {
-      return;
-    }
     setBusy(runCLI ? "cli" : "verify");
     setMessage("");
     try {
@@ -181,9 +184,6 @@ export function ApplicationsPage({
   }
 
   async function rollback(backup: ApplicationBackup) {
-    if (!window.confirm(`确认恢复备份 ${backup.name}？当前配置会先保留。`)) {
-      return;
-    }
     setBusy(backup.name);
     setMessage("");
     try {
@@ -198,6 +198,13 @@ export function ApplicationsPage({
     } finally {
       setBusy("");
     }
+  }
+
+  async function confirmAction() {
+    if (!confirmation) return;
+    if (confirmation.kind === "cli") await verify(true);
+    else await rollback(confirmation.backup);
+    setConfirmation(null);
   }
 
   function modelSelect(
@@ -224,74 +231,27 @@ export function ApplicationsPage({
   }
 
   return (
-    <div className="application-config-page">
-      <WorkflowSteps active={3} />
-      <section className="application-config-overview">
-        <div className="application-overview-copy">
-          <span className="application-overview-label">应用配置</span>
-          <h2>让本地应用使用 AI Router</h2>
-          <p>
-            为不同开发工具维护独立的连接设置和模型映射，不需要手动编辑应用配置文件。
-          </p>
-        </div>
-        <div className="application-overview-stats">
-          <div>
-            <span>已支持应用</span>
-            <b>{apps.length}</b>
-          </div>
-          <div>
-            <span>可用路由</span>
-            <b>{aliases.length}</b>
-          </div>
-          <div>
-            <span>连接方式</span>
-            <b>本地配置</b>
-          </div>
-        </div>
-      </section>
-
+    <div className="application-config-page console-page">
+      <div className="page-toolbar">
+        <div><h1>应用配置</h1><p>为本地开发工具维护连接设置和模型角色映射。</p></div>
+        <span className="filter-count">{apps.length} 个应用 · {aliases.length} 条可用路由</span>
+      </div>
+      <div className="horizontal-sheets" role="tablist" aria-label="应用配置">
+        {apps.map((item) => (
+          <button
+            className={selectedID === item.manifest.id ? "active" : ""}
+            type="button"
+            role="tab"
+            aria-selected={selectedID === item.manifest.id}
+            key={item.manifest.id}
+            onClick={() => setSelectedID(item.manifest.id)}
+          >{item.manifest.name}</button>
+        ))}
+      </div>
       <section className="application-config-workbench">
-        <div className="application-list-panel">
-          <div className="application-list-heading">
-            <div>
-              <b>应用</b>
-              <span>选择要连接 AI Router 的工具</span>
-            </div>
-            <span className="application-count">{apps.length}</span>
-          </div>
-          {apps.map((item) => (
-            <button
-              className={`application-list-item ${selectedID === item.manifest.id ? "active" : ""}`}
-              type="button"
-              key={item.manifest.id}
-              onClick={() => setSelectedID(item.manifest.id)}
-            >
-              <span className="application-monogram claude">
-                {item.manifest.name
-                  .split(" ")
-                  .map((part) => part[0])
-                  .join("")
-                  .slice(0, 2)}
-              </span>
-              <span className="application-list-copy">
-                <b>{item.manifest.name}</b>
-                <small>{item.manifest.description}</small>
-              </span>
-              <span className="application-supported">
-                {item.detection.installed ? "已安装" : "可配置"}
-              </span>
-            </button>
-          ))}
-          <div className="application-list-empty">
-            <span>+</span>
-            <p>后续支持的应用会显示在这里，并使用各自独立的配置流程。</p>
-          </div>
-        </div>
-
         <div className="application-detail-panel">
           <div className="application-detail-header">
             <div className="application-detail-identity">
-              <span className="application-monogram claude">CC</span>
               <div>
                 <div className="application-detail-title">
                   <h3>{selectedApp?.manifest.name || "应用配置"}</h3>
@@ -324,7 +284,7 @@ export function ApplicationsPage({
             </div>
           )}
 
-          {selectedID !== "claude-code" ? (
+          {selectedID !== "claude-code" && selectedID !== "claude-app" ? (
             <div className="application-inline-message">
               此应用适配器尚未提供可视化表单。
             </div>
@@ -335,7 +295,7 @@ export function ApplicationsPage({
                   <div className="application-section-title">
                     <div>
                       <b>连接设置</b>
-                      <span>Claude Code 连接到本机 AI Router</span>
+                      <span>{selectedID === "claude-app" ? "Claude App 通过本机第三方网关连接 AI Router" : "Claude Code 连接到本机 AI Router"}</span>
                     </div>
                     <span>01</span>
                   </div>
@@ -352,7 +312,7 @@ export function ApplicationsPage({
                     <label>
                       AI Router 客户端密钥
                       <input
-                        type="password"
+                        type="text"
                         value={form.api_key}
                         placeholder="留空则保留现有密钥"
                         onChange={(event) =>
@@ -386,7 +346,7 @@ export function ApplicationsPage({
                 <div className="application-save-bar">
                   <div>
                     <ShieldCheck size={16} />
-                    <span>写入前自动备份，不覆盖 Hooks、插件和权限配置。</span>
+                    <span>{selectedID === "claude-app" ? "写入 Claude-3p 独立配置，保存后需重启 Claude App。" : "写入前自动备份，不覆盖 Hooks、插件和权限配置。"}</span>
                   </div>
                   <div className="application-save-actions">
                     {hasCapability("preview") && (
@@ -430,10 +390,10 @@ export function ApplicationsPage({
                 <ApplicationResults
                   verifyResult={verifyResult}
                   busy={busy}
-                  verifyCLI={() => verify(true)}
+                  verifyCLI={selectedID === "claude-code" ? () => setConfirmation({ kind: "cli" }) : undefined}
                   canRollback={hasCapability("rollback")}
                   backups={backups}
-                  rollback={rollback}
+                  rollback={(backup) => setConfirmation({ kind: "rollback", backup })}
                 />
               </div>
 
@@ -461,7 +421,7 @@ export function ApplicationsPage({
                   </details>
                 )}
                 <div className="application-preview-footer">
-                  密钥已脱敏 · 保留 {previewResult?.preserved_fields || 0}{" "}
+                  {webRedaction ? "密钥已脱敏" : "密钥按原文显示"} · 保留 {previewResult?.preserved_fields || 0}{" "}
                   个顶层字段
                 </div>
               </div>
@@ -469,6 +429,21 @@ export function ApplicationsPage({
           )}
         </div>
       </section>
+      <ConfirmDialog
+        open={Boolean(confirmation)}
+        title={confirmation?.kind === "cli" ? "运行完整验证？" : "恢复应用配置备份？"}
+        description={
+          confirmation?.kind === "cli" ? (
+            <>Claude Code 将发起一次真实模型请求，可能产生少量 Token 费用。</>
+          ) : (
+            <>将恢复备份 <b>{confirmation?.backup.name}</b>，当前配置会先自动保留。</>
+          )
+        }
+        confirmLabel={confirmation?.kind === "cli" ? "运行完整验证" : "确认恢复"}
+        busy={Boolean(busy)}
+        onCancel={() => setConfirmation(null)}
+        onConfirm={confirmAction}
+      />
     </div>
   );
 }

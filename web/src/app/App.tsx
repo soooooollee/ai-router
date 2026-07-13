@@ -1,20 +1,32 @@
 import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
   Braces,
+  ChartNoAxesCombined,
   ChevronRight,
   CircleAlert,
   KeyRound,
-  Power,
-  RefreshCw,
+  ListTree,
   Route,
   Server,
   Settings,
 } from "lucide-react";
+import { parse, stringify } from "yaml";
 import { api } from "./api";
+import { applyLocale, initialLocale, type Locale } from "./i18n";
 import type { AppConfig, Page, Status } from "../types";
 const ApplicationsPage = lazy(() =>
   import("../pages/ApplicationsPage/ApplicationsPage").then((module) => ({
     default: module.ApplicationsPage,
+  })),
+);
+const OverviewPage = lazy(() =>
+  import("../pages/OverviewPage/OverviewPage").then((module) => ({
+    default: module.OverviewPage,
+  })),
+);
+const LogsPage = lazy(() =>
+  import("../pages/LogsPage/LogsPage").then((module) => ({
+    default: module.LogsPage,
   })),
 );
 const ProvidersPage = lazy(() =>
@@ -34,9 +46,11 @@ const SettingsPage = lazy(() =>
 );
 
 const pages: { id: Page; label: string; icon: React.ElementType }[] = [
+  { id: "overview", label: "运行概览", icon: ChartNoAxesCombined },
   { id: "providers", label: "模型接入", icon: Server },
   { id: "routes", label: "路由配置", icon: Route },
   { id: "apps", label: "应用配置", icon: Braces },
+  { id: "logs", label: "调用日志", icon: ListTree },
   { id: "settings", label: "系统设置", icon: Settings },
 ];
 
@@ -45,7 +59,7 @@ export function App() {
     location.hash.slice(1) === "claude" ? "apps" : location.hash.slice(1);
   const initialPage = pages.some((item) => item.id === requestedPage)
     ? (requestedPage as Page)
-    : "providers";
+    : "overview";
   const [page, setPage] = useState<Page>(initialPage);
   const [status, setStatus] = useState<Status | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
@@ -53,7 +67,7 @@ export function App() {
   const [hash, setHash] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
-  const [switching, setSwitching] = useState(false);
+  const [locale, setLocale] = useState<Locale>(initialLocale);
   const [token, setToken] = useState(
     sessionStorage.getItem("airoute_token") || "",
   );
@@ -66,8 +80,22 @@ export function App() {
         api("/api/providers"),
       ]);
       setStatus(s);
-      setConfig({ ...c.config, providers: p.providers });
-      setYaml(c.yaml);
+      const localDocument = parse(c.yaml) || {};
+      localDocument.providers = (localDocument.providers || []).map(
+        (configuredProvider: { id?: string; api_key?: string }) => ({
+          ...configuredProvider,
+          api_key:
+            p.providers.find(
+              (provider: AppConfig["providers"][number]) =>
+                provider.id === configuredProvider.id,
+            )?.api_key || configuredProvider.api_key || "",
+        }),
+      );
+      setConfig({
+        ...c.config,
+        providers: p.providers,
+      });
+      setYaml(stringify(localDocument, { lineWidth: 0 }));
       setHash(c.hash);
     } catch (e) {
       setError((e as Error).message);
@@ -75,6 +103,9 @@ export function App() {
       setLoading(false);
     }
   }, []);
+  useEffect(() => {
+    return applyLocale(locale);
+  }, [locale]);
   useEffect(() => {
     load();
     const id = setInterval(() => {
@@ -99,26 +130,6 @@ export function App() {
     setPage(p);
     location.hash = p;
   }
-  async function toggleRuntime() {
-    const enabled = status?.status !== "running";
-    if (
-      !enabled &&
-      !confirm("关闭后将暂停所有 AI 转发请求，管理页面仍可使用。确认关闭？")
-    )
-      return;
-    setSwitching(true);
-    try {
-      await api("/api/runtime", {
-        method: "PUT",
-        body: JSON.stringify({ enabled }),
-      });
-      await load();
-    } catch (e) {
-      setError((e as Error).message);
-    } finally {
-      setSwitching(false);
-    }
-  }
   if (loading)
     return (
       <div className="boot">
@@ -129,8 +140,25 @@ export function App() {
   if (error && error.toLowerCase().includes("unauthorized"))
     return <Login token={token} setToken={setToken} retry={load} />;
   return (
-    <div className="shell">
-      <aside>
+    <div className="app-frame">
+      <header className="app-header">
+        <strong>AI Router</strong>
+        <div>
+          <span className="app-header-caption">本地 AI 协议网关</span>
+          <label className="language-switcher">
+            <span>语言</span>
+            <select aria-label="语言" value={locale} onChange={(event) => { const next = event.target.value as Locale; localStorage.setItem("airoute_locale", next); setLocale(next); }}>
+              <option value="zh-CN">中文</option>
+              <option value="en-US">English</option>
+            </select>
+          </label>
+          <span className={`header-runtime ${status?.status === "running" ? "running" : "stopped"}`}>
+            <i />{status?.status === "running" ? "运行中" : "已关闭"}
+          </span>
+        </div>
+      </header>
+      <div className="shell">
+        <aside>
         <div className="brand">
           <div>
             <strong className="brand-wordmark">AI Router</strong>
@@ -149,42 +177,8 @@ export function App() {
             </button>
           ))}
         </nav>
-        <button
-          className={`side-status ${status?.status === "running" ? "is-running" : "is-stopped"}`}
-          onClick={toggleRuntime}
-          disabled={switching}
-          title={status?.status === "running" ? "关闭 AI 转发" : "启动 AI 转发"}
-        >
-          <span className="dot" />
-          <div>
-            <b>
-              {switching
-                ? "切换中"
-                : status?.status === "running"
-                  ? "运行中"
-                  : "已关闭"}
-            </b>
-            <small>
-              {status?.status === "running"
-                ? "点击关闭 · 重启后恢复"
-                : "点击启动"}
-            </small>
-          </div>
-          <Power size={15} />
-        </button>
-      </aside>
-      <main>
-        <header>
-          <div>
-            <div className="eyebrow">
-              管理控制台 / {pages.find((p) => p.id === page)?.label}
-            </div>
-            <h1>{pages.find((p) => p.id === page)?.label}</h1>
-          </div>
-          <button className="icon-button" onClick={load} title="刷新">
-            <RefreshCw size={17} />
-          </button>
-        </header>
+        </aside>
+        <main>
         {error && (
           <div className="notice error">
             <CircleAlert size={16} />
@@ -198,6 +192,7 @@ export function App() {
           </div>
         )}
         <Suspense fallback={<div className="page-loading">正在加载页面…</div>}>
+          {page === "overview" && <OverviewPage status={status} />}
           {page === "apps" && (
             <ApplicationsPage status={status} config={config} />
           )}
@@ -216,7 +211,6 @@ export function App() {
           {page === "routes" && (
             <RoutesPage
               data={config?.routes || []}
-              fallback={config?.default_route?.targets || []}
               providers={config?.providers || []}
               gateway={status?.gateway_url || "http://127.0.0.1:8080"}
               yaml={yaml}
@@ -228,6 +222,7 @@ export function App() {
               }}
             />
           )}
+          {page === "logs" && <LogsPage />}
           {page === "settings" && (
             <SettingsPage
               yaml={yaml}
@@ -241,7 +236,8 @@ export function App() {
             />
           )}
         </Suspense>
-      </main>
+        </main>
+      </div>
     </div>
   );
 }

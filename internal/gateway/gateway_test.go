@@ -131,7 +131,10 @@ func TestGatewayTranslatesAnthropicStreamToOpenAI(t *testing.T) {
 	}))
 	defer upstream.Close()
 	reg := testRegistry()
-	g := gateway.New(config.NewStore(testConfig(upstream.URL, ir.Anthropic)), reg, observe.NewStore(20), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	c := testConfig(upstream.URL, ir.Anthropic)
+	c.Logging.CaptureBodies = true
+	logs := observe.NewStore(20)
+	g := gateway.New(config.NewStore(c), reg, logs, &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	server := httptest.NewServer(g)
 	defer server.Close()
 	_, body := clientRequest(ir.OpenAIChat, true)
@@ -144,6 +147,10 @@ func TestGatewayTranslatesAnthropicStreamToOpenAI(t *testing.T) {
 	text := string(raw)
 	if !strings.Contains(text, "hello") || !strings.Contains(text, "[DONE]") {
 		t.Fatalf("unexpected stream:\n%s", text)
+	}
+	records := logs.List(1)
+	if len(records) != 1 || !strings.Contains(records[0].ResponseBody, `"delta":"hello"`) {
+		t.Fatalf("streamed response body was not captured: %#v", records)
 	}
 }
 
@@ -641,8 +648,8 @@ func TestCapturedBodiesAreRedacted(t *testing.T) {
 	_, _ = io.Copy(io.Discard, resp.Body)
 	resp.Body.Close()
 	records := logs.List(1)
-	if len(records) != 1 || strings.Contains(records[0].RequestBody, "do-not-log") || !strings.Contains(records[0].RequestBody, "[REDACTED]") {
-		t.Fatalf("body was not redacted: %#v", records)
+	if len(records) != 1 || !strings.Contains(records[0].RequestBody, "do-not-log") || !strings.Contains(records[0].RequestBody, "hello") {
+		t.Fatalf("body was not captured verbatim: %#v", records)
 	}
 }
 

@@ -2,18 +2,13 @@
 
 AI Router 只使用一份版本化 YAML 配置。Web 控制台读取和原子写回同一个文件；保存前会校验、备份，失败时继续使用旧的不可变配置快照。
 
-## 环境变量
+## 本地密钥
 
 ```yaml
-api_key: ${OPENAI_API_KEY}
-token: ${AIROUTE_ADMIN_TOKEN}
+api_key: sk-local-example
 ```
 
-缺少无默认值的环境变量时拒绝启动。管理 API 不返回解析后的值，Web 保存时仍保留原始表达式。
-
-Provider `api_key` 支持直接保存或环境变量引用。直接保存适合仅本机使用的便利模式，配置文件和备份会强制写为 `0600`，但仍应视为包含敏感信息；环境变量模式只在 YAML 中保存引用名称。管理 Token、客户端访问 Key，以及名称中带 authorization/key/token/cookie/secret 的敏感 Header 默认要求环境变量引用。
-
-模型列表只返回 `plaintext`、`environment` 或 `missing` 保存方式以及环境变量名称，不返回已解析的 API Key。设置页查看完整 YAML 时会显示敏感配置提示；原始配置文件权限过宽时，管理 API 会拒绝返回正文。
+Provider `api_key` 直接保存在本机配置中。模型接入页和系统设置页会显示实际值，便于单机使用和维护；配置文件与备份强制使用 `0600` 权限，仍应视为敏感文件。旧版 `${ENV_NAME}` 写法可继续读取，但控制台会展示解析后的实际值，保存配置后会转为明文值。管理 Token、客户端访问 Key，以及名称中带 authorization/key/token/cookie/secret 的敏感 Header 仍按各自的安全规则处理。
 
 ## Server
 
