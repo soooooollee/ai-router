@@ -4,6 +4,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.1.0] - 2026-07-13
+
 ### Added
 
 - Single-binary AI protocol gateway and embedded Web control plane.
@@ -24,3 +26,6 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Rebuilt the Web control plane around four focused pages: Providers, Routes, Applications and Settings.
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
+
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.1.0
