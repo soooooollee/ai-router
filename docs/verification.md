@@ -6,7 +6,7 @@
 
 验收对象：`AI_ROUTER_OPTIMIZATION_ROADMAP.md`
 
-本文件只记录本轮实际执行并可复现的结果。最终命令结果在完成发布门禁后写入下表；GitHub CI 和供应商账户操作单独标记。
+本文件只记录本轮实际执行并可复现的结果。最终命令结果与远程 CI 证据写入下表；尚未执行的发布环境操作单独标记。
 
 ## 代码与本机验证
 
@@ -47,9 +47,9 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| GitHub CI Workflow | 代码具备，未在远程 Runner 执行 | 仓库当前无可用远程；不能把本机结果标为 CI 通过 |
-| GitHub Release Workflow | 代码具备，未打正式标签 | 需远程仓库、OIDC 和 GHCR 权限 |
+| GitHub CI Workflow | 远程完整通过 | 主分支 Run [`29234871105`](https://github.com/soooooollee/ai-router/actions/runs/29234871105)，2026-07-13；Test、Playwright、Race、Vet、Build、漏洞/许可证、三平台 Smoke 与 Docker 全部成功 |
+| GitHub Release Workflow | 代码具备，未打正式标签 | 远程仓库已就绪；等待 24 小时预发布长稳后再验证 OIDC、GHCR 与六平台发行制品 |
 | 外部 Key 轮换 | 所有者接受风险 | 2026-07-13 明确决定不轮换，不再作为本轮阻断；仓库与发行物继续禁止包含真实 Key |
 | 24 小时预发布长稳 | 发布环境待执行 | 本机 60 秒 Race Soak 已通过；正式标签前仍需预发布主机 24 小时窗口 |
 
-上述“发布环境待执行”不降低源码完成度，但在真实完成前不得创建正式公开版本。
+当前仅 24 小时预发布长稳及其后的正式 Release Workflow 属于“发布环境待执行”；在真实完成前不得创建正式公开版本。

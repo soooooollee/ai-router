@@ -1,6 +1,6 @@
 # AI Router 优化推进文档
 
-> 文档状态：源码与本机验收完成；等待远程 CI 与预发布长稳
+> 文档状态：源码、本机与远程 CI 验收完成；等待预发布 24 小时长稳
 > 更新时间：2026-07-13  
 > 适用范围：AI Router 核心网关、Web 控制台、应用配置、配置安全与发行工程
 
@@ -53,7 +53,7 @@
 
 | 优先级 | 主题 | 目标 |
 | --- | --- | --- |
-| P0 | 工程与密钥基线 | 建立可回退版本，轮换已经暴露的测试密钥 |
+| P0 | 工程与密钥基线 | 建立可回退版本，阻止密钥进入仓库并记录所有者接受的轮换风险 |
 | P1 | 应用配置平台化 | 建立统一应用适配器和 API，迁移 Claude Code |
 | P1 | 真实应用验证 | 检测、写入、验证、诊断和回滚形成闭环 |
 | P1 | 前端工程收敛 | 拆分组件、统一样式、删除历史代码 |
@@ -80,7 +80,7 @@
   - 本机 Claude Code 配置和备份。
   - 临时构建产物、日志和诊断文件。
 - 创建首个基线提交并打内部基线标签。
-- 轮换曾经直接出现在对话或测试记录中的供应商密钥。
+- 记录曾经出现在对话或测试记录中的供应商密钥处置结论；所有者决定不轮换时，将其登记为接受风险且不得写入仓库、日志或发行物。
 - 在提交前运行：
 
   ```bash
@@ -94,7 +94,7 @@
 - 工作区只保留明确需要的未提交改动。
 - 任意文件都可以通过 Git 回退到基线版本。
 - 仓库历史中不包含真实密钥。
-- CI 在基线提交上完整通过。
+- 当前主分支 CI 完整通过，基线标签可用于对照和回退。
 
 ## 阶段 1：应用配置平台化
 
@@ -580,7 +580,7 @@ npm audit --audit-level=high --prefix web
 
 本轮按以下三个任务启动，现均已完成：
 
-1. 建立 Git 基线并轮换测试密钥。
+1. 建立 Git 基线并完成测试密钥风险处置记录。
 2. 创建 `internal/application` 和 Claude Code Adapter。
 3. 为现有应用配置流程补充独立 E2E，再开始前端拆分。
 
@@ -590,4 +590,4 @@ npm audit --audit-level=high --prefix web
 
 本机已通过全包 Race、Vet、六平台交叉构建、5/5 Web E2E、npm/Go 漏洞检查、Docker 非 root Smoke、Qwen/MiMo 文本/流式/Tool Calling、Claude Code 真实验证和 60 秒 395,500 条并发流长稳。逐项证据见 [`docs/acceptance.md`](docs/acceptance.md) 和 [`docs/verification.md`](docs/verification.md)。
 
-正式公开版本仍有两项环境门槛，未完成前不得标记为已发布：运行 GitHub CI/Release Workflow，以及在预发布主机完成 24 小时 Race 长稳。仓库所有者已于 2026-07-13 明确决定不轮换此前用于测试的 Xiaomi/SiliconFlow Key，该风险作为所有者接受项记录，不再作为本轮发布阻断；源码、日志、诊断和 Git 历史仍不得包含这些 Key。
+代码已推送至 `https://github.com/soooooollee/ai-router.git`，主分支 GitHub CI 于 2026-07-13 完整通过（Run `29234871105`），覆盖 Linux 全量门禁、Chromium E2E、macOS/Linux/Windows Smoke 和 Docker Build。Release Workflow 保持未触发，因为正式标签前仍需在预发布主机完成 24 小时 Race 长稳；这是目前唯一剩余的正式公开版本环境门槛。仓库所有者已于 2026-07-13 明确决定不轮换此前用于测试的 Xiaomi/SiliconFlow Key，该风险作为所有者接受项记录，不再作为本轮发布阻断；源码、日志、诊断和 Git 历史仍不得包含这些 Key。
