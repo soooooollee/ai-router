@@ -1,0 +1,41 @@
+version: 1
+
+server:
+  listen: 0.0.0.0:8080
+  admin_listen: 0.0.0.0:8081
+  max_concurrent: 256
+
+admin:
+  enabled: true
+  token: ${AIROUTE_ADMIN_TOKEN}
+
+auth:
+  enabled: true
+  keys:
+    - id: docker-client
+      value: ${AIROUTE_CLIENT_KEY}
+
+providers:
+  - id: openai
+    name: OpenAI
+    protocol: openai-responses
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    models: [gpt-5-mini]
+
+default_route:
+  targets:
+    - provider: openai
+      model: gpt-5-mini
+
+conversion:
+  unsupported_fields: warn
+
+logging:
+  level: info
+  format: json
+  request_history: 500
+
+metrics:
+  enabled: true
+  path: /metrics

@@ -1,0 +1,49 @@
+version: 1
+
+server:
+  listen: 127.0.0.1:18080
+  admin_listen: 127.0.0.1:18081
+
+admin:
+  enabled: true
+  token: ${E2E_ADMIN_TOKEN}
+
+auth:
+  enabled: true
+  keys:
+    - id: e2e-client
+      value: ${E2E_CLIENT_KEY}
+
+providers:
+  - id: mock
+    name: Mock Provider
+    protocol: openai-chat
+    base_url: http://127.0.0.1:19090/v1
+    api_key: ${E2E_PROVIDER_KEY}
+    models: [mock-model]
+    allow_private_url: true
+
+routes:
+  - id: fast
+    priority: 100
+    match:
+      model: fast
+    targets:
+      - provider: mock
+        model: mock-model
+
+default_route:
+  targets:
+    - provider: mock
+      model: mock-model
+
+conversion:
+  unsupported_fields: warn
+
+logging:
+  level: info
+  request_history: 500
+
+metrics:
+  enabled: true
+  path: /metrics

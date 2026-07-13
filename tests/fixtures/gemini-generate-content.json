@@ -1,0 +1,9 @@
+{
+  "protocol": "gemini-generate-content",
+  "request": {"model":"fixture-model","systemInstruction":{"parts":[{"text":"Be concise."}]},"contents":[{"role":"user","parts":[{"text":"hello"},{"fileData":{"fileUri":"https://example.com/image.png","mimeType":"image/png"}}]}],"tools":[{"functionDeclarations":[{"name":"lookup","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}]}],"stream":true},
+  "response": {"modelVersion":"fixture-model","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"hello"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}},
+  "stream": [
+    {"data":{"modelVersion":"fixture-model","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"hel"}]}}]}},
+    {"data":{"modelVersion":"fixture-model","candidates":[{"index":0,"content":{"role":"model","parts":[{"text":"lo"}]},"finishReason":"STOP"}],"usageMetadata":{"promptTokenCount":3,"candidatesTokenCount":2,"totalTokenCount":5}}}
+  ]
+}

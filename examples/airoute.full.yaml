@@ -1,0 +1,97 @@
+version: 1
+
+server:
+  listen: 0.0.0.0:8080
+  admin_listen: 127.0.0.1:8081
+  read_header_timeout: 10s
+  request_timeout: 10m
+  max_body_size: 32MiB
+  max_concurrent: 256
+  max_headers: 100
+  max_header_bytes: 1048576
+
+admin:
+  enabled: true
+  token: ${AIROUTE_ADMIN_TOKEN}
+
+auth:
+  enabled: true
+  keys:
+    - id: local-client
+      value: ${AIROUTE_CLIENT_KEY}
+
+providers:
+  - id: openai
+    name: OpenAI
+    protocol: openai-responses
+    base_url: https://api.openai.com/v1
+    api_key: ${OPENAI_API_KEY}
+    models: [gpt-5, gpt-5-mini]
+    request_fields:
+      store: false
+    timeout: 5m
+
+  - id: anthropic
+    name: Anthropic
+    protocol: anthropic-messages
+    base_url: https://api.anthropic.com
+    api_key: ${ANTHROPIC_API_KEY}
+    models: [claude-sonnet-4-5]
+
+  - id: gemini
+    name: Gemini
+    protocol: gemini-generate-content
+    base_url: https://generativelanguage.googleapis.com
+    api_key: ${GEMINI_API_KEY}
+    models: [gemini-2.5-pro]
+
+routes:
+  - id: fast
+    priority: 100
+    match:
+      model: fast
+    targets:
+      - provider: openai
+        model: gpt-5-mini
+
+  - id: coding
+    priority: 90
+    match:
+      model: coding
+      tools: true
+    targets:
+      - provider: anthropic
+        model: claude-sonnet-4-5
+      - provider: openai
+        model: gpt-5
+
+default_route:
+  targets:
+    - provider: openai
+      model: gpt-5-mini
+
+conversion:
+  unsupported_fields: warn
+  preserve_extensions: true
+  remote_image_policy: pass-through
+
+retry:
+  max_attempts: 2
+  base_delay: 500ms
+  max_delay: 5s
+  on_status: [429, 500, 502, 503, 504]
+
+fallback:
+  on_network_error: true
+  on_timeout: true
+  on_status: [429, 500, 502, 503, 504]
+
+logging:
+  level: info
+  format: json
+  request_history: 500
+  capture_bodies: false
+
+metrics:
+  enabled: true
+  path: /metrics

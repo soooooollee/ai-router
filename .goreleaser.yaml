@@ -1,0 +1,33 @@
+version: 2
+project_name: airoute
+before:
+  hooks:
+    - sh -c "cd web && npm ci && npm run build"
+builds:
+  - id: airoute
+    main: ./cmd/airoute
+    binary: airoute
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.Commit}} -X main.builtAt={{.Date}}
+archives:
+  - formats: [tar.gz]
+    files:
+      - LICENSE
+      - README.md
+      - CHANGELOG.md
+      - schemas/config.v1.schema.json
+      - examples/airoute.minimal.yaml
+      - examples/airoute.full.yaml
+      - examples/airoute.qwen3.yaml
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+checksum:
+  name_template: checksums.txt
+sboms:
+  - artifacts: archive
+changelog:
+  sort: asc

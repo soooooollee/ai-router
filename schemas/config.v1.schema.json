@@ -1,0 +1,50 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://airoute.local/schemas/config.v1.schema.json",
+  "title": "AI Router configuration v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "providers"],
+  "properties": {
+    "version": { "const": 1 },
+    "server": {
+      "type": "object", "additionalProperties": false,
+      "properties": {
+        "listen": { "type": "string", "default": "127.0.0.1:8080" },
+        "admin_listen": { "type": "string", "default": "127.0.0.1:8081" },
+        "read_header_timeout": { "$ref": "#/$defs/duration" },
+        "request_timeout": { "$ref": "#/$defs/duration" },
+        "max_body_size": { "oneOf": [{"type":"integer","minimum":1},{"type":"string","pattern":"^[0-9]+(B|KiB|MiB|GiB)$"}] },
+        "max_concurrent": { "type": "integer", "minimum": 1 },
+        "max_headers": { "type": "integer", "minimum": 1, "maximum": 1000 },
+        "max_header_bytes": { "type": "integer", "minimum": 1024 }
+      }
+    },
+    "admin": { "type":"object", "additionalProperties":false, "properties":{"enabled":{"type":"boolean"},"token":{"type":"string"},"allowed_hosts":{"type":"array","items":{"type":"string"}}} },
+    "auth": { "type":"object", "additionalProperties":false, "properties":{"enabled":{"type":"boolean"},"keys":{"type":"array","items":{"type":"object","additionalProperties":false,"required":["id","value"],"properties":{"id":{"type":"string","minLength":1},"value":{"type":"string","minLength":1}}}}} },
+    "providers": { "type":"array", "items":{"$ref":"#/$defs/provider"} },
+    "routes": { "type":"array", "items":{"$ref":"#/$defs/route"} },
+    "default_route": { "$ref":"#/$defs/targetList" },
+    "conversion": { "type":"object", "additionalProperties":false, "properties":{"unsupported_fields":{"enum":["strict","warn","drop"]},"preserve_extensions":{"type":"boolean"},"remote_image_policy":{"enum":["pass-through","reject"]}} },
+    "retry": { "type":"object", "additionalProperties":false, "properties":{"max_attempts":{"type":"integer","minimum":1,"maximum":10},"base_delay":{"$ref":"#/$defs/duration"},"max_delay":{"$ref":"#/$defs/duration"},"on_status":{"type":"array","items":{"type":"integer","minimum":400,"maximum":599}}} },
+    "fallback": { "type":"object", "additionalProperties":false, "properties":{"on_network_error":{"type":"boolean"},"on_timeout":{"type":"boolean"},"on_status":{"type":"array","items":{"type":"integer","minimum":400,"maximum":599}},"on_error_codes":{"type":"array","items":{"type":"string","minLength":1}}} },
+    "logging": { "type":"object", "additionalProperties":false, "properties":{"level":{"enum":["debug","info","warn","error"]},"format":{"enum":["json","text"]},"request_history":{"type":"integer","minimum":1,"maximum":100000},"capture_bodies":{"type":"boolean"},"file":{"type":"string"}} },
+    "metrics": { "type":"object", "additionalProperties":false, "properties":{"enabled":{"type":"boolean"},"path":{"type":"string","pattern":"^/"},"model_labels":{"type":"boolean"}} }
+  },
+  "anyOf": [{"required":["routes"]},{"required":["default_route"]}],
+  "$defs": {
+    "duration": { "type":"string", "pattern":"^[0-9]+(ns|us|µs|ms|s|m|h)$" },
+    "protocol": { "enum":["openai-chat","openai-responses","anthropic-messages","gemini-generate-content"] },
+    "provider": {
+      "type":"object", "additionalProperties":false, "required":["id","protocol","base_url"],
+      "properties":{"id":{"type":"string","pattern":"^[A-Za-z0-9][A-Za-z0-9._-]*$"},"name":{"type":"string"},"profile":{"enum":["generic","qwen3","xiaomi-mimo"]},"reasoning_mode":{"enum":["auto","enabled","disabled"]},"max_output_tokens":{"type":"integer","minimum":1},"protocol":{"$ref":"#/$defs/protocol"},"base_url":{"type":"string","format":"uri"},"api_key":{"type":"string"},"models":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},"dynamic_models":{"type":"boolean"},"headers":{"type":"object","additionalProperties":{"type":"string"}},"request_fields":{"type":"object"},"timeout":{"$ref":"#/$defs/duration"},"allow_private_url":{"type":"boolean"}},
+      "anyOf":[{"required":["models"]},{"required":["dynamic_models"],"properties":{"dynamic_models":{"const":true}}}]
+    },
+    "target": { "type":"object", "additionalProperties":false, "required":["provider","model"], "properties":{"provider":{"type":"string"},"model":{"type":"string"}} },
+    "targetList": { "type":"object", "additionalProperties":false, "required":["targets"], "properties":{"targets":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/target"}}} },
+    "route": {
+      "type":"object", "additionalProperties":false, "required":["id","match","targets"],
+      "properties":{"id":{"type":"string","minLength":1},"priority":{"type":"integer"},"match":{"type":"object","additionalProperties":false,"properties":{"model":{"type":"string"},"protocol":{"$ref":"#/$defs/protocol"},"stream":{"type":"boolean"},"tools":{"type":"boolean"},"image":{"type":"boolean"},"headers":{"type":"object","additionalProperties":{"type":"string"}}}},"targets":{"type":"array","minItems":1,"items":{"$ref":"#/$defs/target"}}}
+    }
+  }
+}

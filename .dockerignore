@@ -1,0 +1,6 @@
+.git
+bin
+web/node_modules
+claude-code-router
+*.log
+airoute.yaml

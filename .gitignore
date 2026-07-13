@@ -1,0 +1,13 @@
+/bin/
+/claude-code-router/
+/web/node_modules/
+/web/dist/
+/web/test-results/
+/web/playwright-report/
+/web/*.tsbuildinfo
+*.log
+*.tmp
+.DS_Store
+.env
+airoute.yaml
+airoute.yaml.bak.*

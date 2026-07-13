@@ -1,0 +1,83 @@
+version: 1
+
+server:
+  listen: 127.0.0.1:8080
+  admin_listen: 127.0.0.1:8081
+  request_timeout: 10m
+
+admin:
+  enabled: true
+
+auth:
+  enabled: false
+
+providers:
+  - id: siliconflow-qwen3
+    name: SiliconFlow Qwen 3.x
+    profile: qwen3
+    reasoning_mode: disabled
+    max_output_tokens: 1024
+    protocol: openai-chat
+    base_url: https://api.siliconflow.cn/v1
+    api_key: ${SILICONFLOW_API_KEY}
+    models: [Qwen/Qwen3.6-35B-A3B]
+    timeout: 5m
+
+  - id: xiaomi-mimo-openai
+    name: Xiaomi MiMo (OpenAI)
+    profile: xiaomi-mimo
+    protocol: openai-chat
+    base_url: https://api.xiaomimimo.com/v1
+    api_key: ${MIMO_API_KEY}
+    models: [mimo-v2.5]
+    timeout: 5m
+
+  - id: xiaomi-mimo-anthropic
+    name: Xiaomi MiMo (Anthropic)
+    profile: xiaomi-mimo
+    protocol: anthropic-messages
+    base_url: https://api.xiaomimimo.com/anthropic
+    api_key: ${MIMO_API_KEY}
+    models: [mimo-v2.5]
+    timeout: 5m
+
+routes:
+  - id: qwen3
+    priority: 100
+    match: {model: qwen3}
+    targets:
+      - {provider: siliconflow-qwen3, model: Qwen/Qwen3.6-35B-A3B}
+
+  - id: mimo-openai
+    priority: 100
+    match: {model: mimo}
+    targets:
+      - {provider: xiaomi-mimo-openai, model: mimo-v2.5}
+
+  - id: mimo-anthropic
+    priority: 100
+    match: {model: mimo-anthropic}
+    targets:
+      - {provider: xiaomi-mimo-anthropic, model: mimo-v2.5}
+
+default_route:
+  targets:
+    - {provider: siliconflow-qwen3, model: Qwen/Qwen3.6-35B-A3B}
+
+conversion:
+  unsupported_fields: warn
+  preserve_extensions: true
+
+retry:
+  max_attempts: 2
+  base_delay: 500ms
+  max_delay: 5s
+  on_status: [429, 500, 502, 503, 504]
+
+logging:
+  level: info
+  request_history: 500
+
+metrics:
+  enabled: true
+  path: /metrics

@@ -1,0 +1,11 @@
+{
+  "protocol": "openai-chat",
+  "request": {"model":"fixture-model","messages":[{"role":"system","content":"Be concise."},{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image_url","image_url":{"url":"https://example.com/image.png"}}]}],"tools":[{"type":"function","function":{"name":"lookup","parameters":{"type":"object","properties":{"q":{"type":"string"}}}}}],"stream":true},
+  "response": {"id":"fixture-response","model":"fixture-model","choices":[{"index":0,"message":{"role":"assistant","content":"hello"},"finish_reason":"stop"}],"usage":{"prompt_tokens":3,"completion_tokens":2,"total_tokens":5}},
+  "stream": [
+    {"data":{"id":"fixture-response","model":"fixture-model","choices":[{"index":0,"delta":{"role":"assistant"},"finish_reason":null}]}},
+    {"data":{"id":"fixture-response","model":"fixture-model","choices":[{"index":0,"delta":{"content":"hello"},"finish_reason":null}]}},
+    {"data":{"id":"fixture-response","model":"fixture-model","choices":[{"index":0,"delta":{},"finish_reason":"stop"}]}},
+    {"data":"[DONE]"}
+  ]
+}

@@ -1,0 +1,13 @@
+{
+  "protocol": "anthropic-messages",
+  "request": {"model":"fixture-model","system":"Be concise.","messages":[{"role":"user","content":[{"type":"text","text":"hello"},{"type":"image","source":{"type":"url","url":"https://example.com/image.png"}}]}],"tools":[{"name":"lookup","input_schema":{"type":"object","properties":{"q":{"type":"string"}}}}],"max_tokens":64,"stream":true},
+  "response": {"id":"fixture-response","type":"message","role":"assistant","model":"fixture-model","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","usage":{"input_tokens":3,"output_tokens":2}},
+  "stream": [
+    {"event":"message_start","data":{"type":"message_start","message":{"id":"fixture-response","model":"fixture-model","usage":{"input_tokens":3,"output_tokens":0}}}},
+    {"event":"content_block_start","data":{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}},
+    {"event":"content_block_delta","data":{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}},
+    {"event":"content_block_stop","data":{"type":"content_block_stop","index":0}},
+    {"event":"message_delta","data":{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":2}}},
+    {"event":"message_stop","data":{"type":"message_stop"}}
+  ]
+}

@@ -1,0 +1,159 @@
+openapi: 3.1.0
+info:
+  title: AI Router Management API
+  version: 1.0.0
+  description: 管理控制面 API。模型网关端点保持各自供应商的原生 Schema。
+servers:
+  - url: http://127.0.0.1:8081
+security:
+  - bearerAuth: []
+paths:
+  /api/status:
+    get:
+      summary: 获取服务、配置和指标状态
+      responses:
+        "200": { description: Current status, content: { application/json: { schema: { type: object } } } }
+  /api/config:
+    get:
+      summary: 获取原始 YAML 和脱敏配置
+      responses:
+        "200": { description: Configuration, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigEnvelope" } } } }
+    put:
+      summary: 原子保存并热加载配置
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [yaml, expected_hash]
+              properties:
+                yaml: { type: string }
+                expected_hash: { type: string }
+      responses:
+        "200": { description: Saved }
+        "409": { description: Configuration changed concurrently }
+        "422": { description: Invalid configuration }
+  /api/config/validate:
+    post:
+      summary: 校验配置但不保存
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [yaml], properties: { yaml: { type: string } } } } }
+      responses:
+        "200": { description: Valid }
+        "422": { description: Invalid }
+  /api/config/reload:
+    post:
+      summary: 从磁盘重新加载配置
+      responses: { "200": { description: Reloaded } }
+  /api/config/backups:
+    get:
+      summary: 列出配置备份
+      responses: { "200": { description: Backups } }
+  /api/config/rollback:
+    post:
+      summary: 回滚配置备份
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [name], properties: { name: { type: string } } } } }
+      responses: { "200": { description: Rolled back }, "422": { description: Backup invalid } }
+  /api/providers:
+    get:
+      summary: 获取脱敏 Provider 列表
+      responses: { "200": { description: Providers } }
+  /api/providers/{id}/probe:
+    post:
+      summary: 探测 Provider、发现模型并可选发送最小测试请求
+      parameters: [{ name: id, in: path, required: true, schema: { type: string } }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                test_request: { type: boolean, default: false }
+      responses: { "200": { description: Probe report } }
+  /api/routes/explain:
+    get:
+      summary: 通过请求特征解释路由选择
+      parameters:
+        - { name: protocol, in: query, required: true, schema: { $ref: "#/components/schemas/Protocol" } }
+        - { name: model, in: query, required: true, schema: { type: string } }
+        - { name: stream, in: query, schema: { type: boolean } }
+        - { name: tools, in: query, schema: { type: boolean } }
+        - { name: image, in: query, schema: { type: boolean } }
+        - { name: header, in: query, description: "可重复的 Name:value 条件", schema: { type: array, items: { type: string } } }
+      responses: { "200": { description: Decision and canonical request }, "404": { description: No route } }
+    post:
+      summary: 通过完整协议请求解释路由选择
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocol, request]
+              properties:
+                protocol: { $ref: "#/components/schemas/Protocol" }
+                request: { type: object }
+                headers: { type: object, additionalProperties: { type: string } }
+      responses: { "200": { description: Decision and canonical request }, "404": { description: No route } }
+  /api/playground/preview:
+    post:
+      summary: 预览 Canonical IR、路由和上游请求，不访问 Provider
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [protocol, request]
+              properties:
+                protocol: { $ref: "#/components/schemas/Protocol" }
+                request: { type: object }
+                headers: { type: object, additionalProperties: { type: string } }
+      responses: { "200": { description: Canonical request, route decision, upstream request and diagnostics } }
+  /api/playground/request:
+    post:
+      summary: 通过本地网关发送测试请求
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [protocol, body], properties: { protocol: { $ref: "#/components/schemas/Protocol" }, body: { type: object } } } } }
+      responses: { "200": { description: Gateway response envelope } }
+  /api/logs:
+    get:
+      summary: 获取最近请求日志
+      parameters: [{ name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 100000 } }]
+      responses: { "200": { description: Logs } }
+  /api/logs/{requestId}:
+    get:
+      summary: 获取请求详情
+      parameters: [{ name: requestId, in: path, required: true, schema: { type: string } }]
+      responses: { "200": { description: Log detail }, "404": { description: Not found } }
+  /api/metrics/summary:
+    get:
+      summary: 获取聚合指标
+      responses: { "200": { description: Metrics } }
+  /api/diagnostics:
+    get:
+      summary: 导出自动脱敏的诊断包及内容清单
+      responses:
+        "200":
+          description: Redacted diagnostic bundle
+          headers:
+            Content-Disposition: { schema: { type: string } }
+components:
+  securitySchemes:
+    bearerAuth: { type: http, scheme: bearer }
+  schemas:
+    Protocol:
+      type: string
+      enum: [openai-chat, openai-responses, anthropic-messages, gemini-generate-content]
+    ConfigEnvelope:
+      type: object
+      required: [yaml, hash, config]
+      properties:
+        yaml: { type: string }
+        hash: { type: string }
+        config: { type: object }
