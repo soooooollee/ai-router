@@ -53,4 +53,4 @@ make release-check
 - `.github/workflows/ci.yml` 已配置 Linux 全量门禁、Chromium E2E、三种原生操作系统 Smoke 和 Docker Build。
 - `.github/workflows/release.yml` 已配置六平台制品、Checksum、SBOM、OIDC 签名与 amd64/arm64 镜像。
 - 没有远程仓库或 GitHub Runner 时，只能证明 Workflow 配置存在及本机等价命令通过，不能声称 GitHub CI 已运行。
-- 用户曾在对话中暴露的 Xiaomi 与 SiliconFlow 测试 Key 必须在供应商侧轮换；代码无法替用户完成此账户操作，正式发布前必须处理。
+- 仓库所有者已于 2026-07-13 明确接受不轮换对话中测试 Key 的风险，因此不再把轮换列为本轮阻断；仓库和发行物仍通过扫描确保不包含真实 Key。

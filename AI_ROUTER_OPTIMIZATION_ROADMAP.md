@@ -1,6 +1,6 @@
 # AI Router 优化推进文档
 
-> 文档状态：源码与本机验收完成；正式发布受外部门槛限制
+> 文档状态：源码与本机验收完成；等待远程 CI 与预发布长稳
 > 更新时间：2026-07-13  
 > 适用范围：AI Router 核心网关、Web 控制台、应用配置、配置安全与发行工程
 
@@ -590,4 +590,4 @@ npm audit --audit-level=high --prefix web
 
 本机已通过全包 Race、Vet、六平台交叉构建、5/5 Web E2E、npm/Go 漏洞检查、Docker 非 root Smoke、Qwen/MiMo 文本/流式/Tool Calling、Claude Code 真实验证和 60 秒 395,500 条并发流长稳。逐项证据见 [`docs/acceptance.md`](docs/acceptance.md) 和 [`docs/verification.md`](docs/verification.md)。
 
-正式公开版本仍有三项非源码门槛，未完成前不得标记为已发布：供应商账户所有者轮换曾暴露的 Xiaomi/SiliconFlow Key；在具备远程仓库后运行 GitHub CI/Release Workflow；在预发布主机完成 24 小时 Race 长稳。仓库当前没有 Git Remote，代码无法替账户所有者执行 Key 撤销，因此这些项目被明确记录为发布阻断而不是伪造为通过。
+正式公开版本仍有两项环境门槛，未完成前不得标记为已发布：运行 GitHub CI/Release Workflow，以及在预发布主机完成 24 小时 Race 长稳。仓库所有者已于 2026-07-13 明确决定不轮换此前用于测试的 Xiaomi/SiliconFlow Key，该风险作为所有者接受项记录，不再作为本轮发布阻断；源码、日志、诊断和 Git 历史仍不得包含这些 Key。
