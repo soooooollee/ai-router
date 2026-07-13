@@ -1,0 +1,23 @@
+services:
+  airoute:
+    build: .
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+      - "127.0.0.1:8081:8081"
+    user: "${AIROUTE_UID:-1000}:${AIROUTE_GID:-1000}"
+    volumes:
+      # Mount the directory, not a single file: atomic save/backup/rollback all
+      # require rename and sibling-file creation in the same filesystem.
+      - ./data:/data
+    environment:
+      AIROUTE_ADMIN_TOKEN: ${AIROUTE_ADMIN_TOKEN}
+      AIROUTE_CLIENT_KEY: ${AIROUTE_CLIENT_KEY}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8080/healthz"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
