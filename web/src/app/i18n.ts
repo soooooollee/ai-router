@@ -150,6 +150,9 @@ const zhToEn: Record<string, string> = {
   "已安装": "Installed",
   "Claude Code 已安装": "Claude Code installed",
   "Claude App 已安装": "Claude App installed",
+  "未检测到 Claude Code 命令": "Claude Code command not found",
+  "已检测到命令，但版本读取失败": "Command detected, but version lookup failed",
+  "未检测到 Claude App": "Claude App not detected",
   "未检测到": "Not detected",
   "配置已同步": "Configuration synced",
   "尚未同步": "Not synced",
@@ -309,7 +312,7 @@ const dynamicFragments: Array<[string, string]> = [
   ["日志会写入本机磁盘。", "Logs are written to local disk."],
 ];
 
-function translateValue(value: string, locale: Locale): string {
+export function translateValue(value: string, locale: Locale): string {
   const table = locale === "en-US" ? zhToEn : enToZh;
   const trimmed = value.trim();
   const direct = table[trimmed];
