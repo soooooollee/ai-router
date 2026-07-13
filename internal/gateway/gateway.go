@@ -17,6 +17,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -30,6 +31,7 @@ import (
 	"github.com/zbss/airoute/internal/routing"
 	"github.com/zbss/airoute/internal/secure"
 	"github.com/zbss/airoute/internal/streaming"
+	"github.com/zbss/airoute/internal/tokencount"
 )
 
 type Gateway struct {
@@ -41,6 +43,9 @@ type Gateway struct {
 	RestrictedClient *http.Client
 	Logger           *slog.Logger
 	sem              chan struct{}
+	semMu            sync.RWMutex
+	clientMu         sync.RWMutex
+	levelController  *slog.LevelVar
 	enabled          atomic.Bool
 }
 
@@ -51,11 +56,8 @@ func New(c *config.Store, r *protocol.Registry, logs *observe.Store, metrics *ob
 	if maxConcurrent < 1 {
 		maxConcurrent = 256
 	}
-	redirectPolicy := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
-	maxIdle := max(100, maxConcurrent*2)
-	standardTransport := &http.Transport{Proxy: http.ProxyFromEnvironment, MaxIdleConns: maxIdle, MaxIdleConnsPerHost: maxConcurrent, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 10 * time.Minute, ForceAttemptHTTP2: true}
-	restrictedTransport := &http.Transport{Proxy: nil, DialContext: secure.PublicDialContext, MaxIdleConns: maxIdle, MaxIdleConnsPerHost: maxConcurrent, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 10 * time.Minute, ForceAttemptHTTP2: true}
-	g := &Gateway{Config: c, Registry: r, Logs: logs, Metrics: metrics, Client: &http.Client{Transport: standardTransport, CheckRedirect: redirectPolicy}, RestrictedClient: &http.Client{Transport: restrictedTransport, CheckRedirect: redirectPolicy}, Logger: logger, sem: make(chan struct{}, maxConcurrent)}
+	standard, restricted := runtimeClients(maxConcurrent)
+	g := &Gateway{Config: c, Registry: r, Logs: logs, Metrics: metrics, Client: standard, RestrictedClient: restricted, Logger: logger, sem: make(chan struct{}, maxConcurrent)}
 	g.enabled.Store(true)
 	return g
 }
@@ -63,9 +65,77 @@ func New(c *config.Store, r *protocol.Registry, logs *observe.Store, metrics *ob
 func (g *Gateway) SetEnabled(enabled bool) { g.enabled.Store(enabled) }
 func (g *Gateway) IsEnabled() bool         { return g.enabled.Load() }
 
+func runtimeClients(maxConcurrent int) (*http.Client, *http.Client) {
+	redirectPolicy := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	maxIdle := max(100, maxConcurrent*2)
+	standardTransport := &http.Transport{Proxy: http.ProxyFromEnvironment, MaxIdleConns: maxIdle, MaxIdleConnsPerHost: maxConcurrent, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 10 * time.Minute, ForceAttemptHTTP2: true}
+	restrictedTransport := &http.Transport{Proxy: nil, DialContext: secure.PublicDialContext, MaxIdleConns: maxIdle, MaxIdleConnsPerHost: maxConcurrent, IdleConnTimeout: 90 * time.Second, ResponseHeaderTimeout: 10 * time.Minute, ForceAttemptHTTP2: true}
+	return &http.Client{Transport: standardTransport, CheckRedirect: redirectPolicy}, &http.Client{Transport: restrictedTransport, CheckRedirect: redirectPolicy}
+}
+
+func (g *Gateway) ApplyRuntimeConfig(previous, next *config.Config) {
+	if previous == nil || next == nil {
+		return
+	}
+	if g.levelController != nil && previous.Logging.Level != next.Logging.Level {
+		g.levelController.Set(logLevel(next.Logging.Level))
+	}
+	if previous.Server.MaxConcurrent == next.Server.MaxConcurrent {
+		return
+	}
+	limit := next.Server.MaxConcurrent
+	if limit < 1 {
+		limit = 256
+	}
+	standard, restricted := runtimeClients(limit)
+	g.semMu.Lock()
+	g.sem = make(chan struct{}, limit)
+	g.semMu.Unlock()
+	g.clientMu.Lock()
+	oldStandard, oldRestricted := g.Client, g.RestrictedClient
+	g.Client, g.RestrictedClient = standard, restricted
+	g.clientMu.Unlock()
+	oldStandard.CloseIdleConnections()
+	oldRestricted.CloseIdleConnections()
+}
+
+func (g *Gateway) SetLogLevelController(controller *slog.LevelVar) {
+	g.levelController = controller
+}
+
+func logLevel(value string) slog.Level {
+	switch value {
+	case "debug":
+		return slog.LevelDebug
+	case "warn":
+		return slog.LevelWarn
+	case "error":
+		return slog.LevelError
+	default:
+		return slog.LevelInfo
+	}
+}
+
+// RuntimeLimits exposes the active runtime object limits for diagnostics and
+// acceptance tests; values come from live objects, not the stored config.
+func (g *Gateway) RuntimeLimits() (concurrent, idlePerHost int) {
+	g.semMu.RLock()
+	concurrent = cap(g.sem)
+	g.semMu.RUnlock()
+	g.clientMu.RLock()
+	if transport, ok := g.Client.Transport.(*http.Transport); ok {
+		idlePerHost = transport.MaxIdleConnsPerHost
+	}
+	g.clientMu.RUnlock()
+	return concurrent, idlePerHost
+}
+
 func (g *Gateway) CloseIdleConnections() {
-	g.Client.CloseIdleConnections()
-	g.RestrictedClient.CloseIdleConnections()
+	g.clientMu.RLock()
+	standard, restricted := g.Client, g.RestrictedClient
+	g.clientMu.RUnlock()
+	standard.CloseIdleConnections()
+	restricted.CloseIdleConnections()
 }
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -124,9 +194,12 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errorOut(w, ir.OpenAIChat, 404, "not_found", "unknown gateway endpoint", id)
 		return
 	}
+	g.semMu.RLock()
+	sem := g.sem
+	g.semMu.RUnlock()
 	select {
-	case g.sem <- struct{}{}:
-		defer func() { <-g.sem }()
+	case sem <- struct{}{}:
+		defer func() { <-sem }()
 	default:
 		errorOut(w, p, http.StatusTooManyRequests, "rate_limited", "gateway concurrency limit reached", id)
 		return
@@ -163,23 +236,96 @@ func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.
 		errorOut(w, ir.Anthropic, 400, "invalid_request", err.Error(), id)
 		return
 	}
-	n := 0
-	for _, b := range req.Instructions {
-		n += len([]rune(b.Text))
-	}
-	for _, m := range req.Messages {
-		for _, b := range m.Content {
-			n += len([]rune(b.Text)) + len(b.Arguments) + len(b.Result)
+	headers := map[string]string{}
+	for key, values := range r.Header {
+		if len(values) > 0 {
+			headers[strings.ToLower(key)] = values[0]
 		}
 	}
-	for _, t := range req.Tools {
-		n += len([]rune(t.Name+t.Description)) + len(t.InputSchema)
+	decision, routeErr := routing.Resolve(c, routing.Input{Request: req, Protocol: ir.Anthropic, Headers: headers})
+	if routeErr == nil && len(decision.Targets) > 0 {
+		target := decision.Targets[0]
+		if providerprofile.ProviderCapabilities(target.Provider, target.Model).NativeTokenCount {
+			if tokens, nativeErr := g.nativeTokenCount(r.Context(), req, target); nativeErr == nil {
+				jsonOut(w, 200, map[string]any{"input_tokens": tokens, "estimated": false, "strategy": "provider-native", "provider": target.Provider.ID, "model": target.Model})
+				return
+			}
+		}
 	}
-	tokens := (n + 3) / 4
-	if tokens < 1 {
-		tokens = 1
+	result := (tokencount.Heuristic{}).Count(req)
+	jsonOut(w, 200, result)
+}
+
+func (g *Gateway) nativeTokenCount(ctx context.Context, request *ir.Request, target routing.ResolvedTarget) (int, error) {
+	canonical := *request
+	canonical.Model = target.Model
+	adapter, err := g.Registry.Get(ir.Anthropic)
+	if err != nil {
+		return 0, err
 	}
-	jsonOut(w, 200, map[string]any{"input_tokens": tokens, "estimated": true})
+	payload, _, err := adapter.EncodeRequest(ctx, &canonical)
+	if err != nil {
+		return 0, err
+	}
+	var document map[string]any
+	if err = json.Unmarshal(payload, &document); err != nil {
+		return 0, err
+	}
+	for _, key := range []string{"max_tokens", "stream", "temperature", "top_p", "top_k", "stop_sequences"} {
+		delete(document, key)
+	}
+	payload, err = json.Marshal(document)
+	if err != nil {
+		return 0, err
+	}
+	endpoint := appendEndpoint(strings.TrimRight(target.Provider.BaseURL, "/"), "/messages/count_tokens")
+	if err = secure.ValidatePublicTarget(ctx, endpoint, target.Provider.AllowPrivateURL); err != nil {
+		return 0, err
+	}
+	timeout := target.Provider.Timeout
+	if timeout <= 0 {
+		timeout = 30 * time.Second
+	}
+	requestContext, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	req, err := http.NewRequestWithContext(requestContext, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return 0, err
+	}
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("accept", "application/json")
+	req.Header.Set("anthropic-version", "2023-06-01")
+	req.Header.Set("x-api-key", target.Provider.APIKey)
+	for key, value := range target.Provider.Headers {
+		if allowedProviderHeader(key) {
+			req.Header.Set(key, value)
+		}
+	}
+	g.clientMu.RLock()
+	client := g.RestrictedClient
+	if target.Provider.AllowPrivateURL {
+		client = g.Client
+	}
+	g.clientMu.RUnlock()
+	response, err := client.Do(req)
+	if err != nil {
+		return 0, err
+	}
+	defer response.Body.Close()
+	responseBody, err := io.ReadAll(io.LimitReader(response.Body, 256<<10))
+	if err != nil {
+		return 0, err
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		return 0, fmt.Errorf("native token count returned HTTP %d", response.StatusCode)
+	}
+	var result struct {
+		InputTokens int `json:"input_tokens"`
+	}
+	if err = json.Unmarshal(responseBody, &result); err != nil || result.InputTokens < 1 {
+		return 0, errors.New("native token count returned an invalid response")
+	}
+	return result.InputTokens, nil
 }
 
 func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Config, clientProtocol ir.Protocol, pathModel, id, clientKeyID string) {
@@ -407,6 +553,8 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	record.ProviderID = target.Provider.ID
 	record.UpstreamProtocol = target.Provider.Protocol
 	record.ResolvedModel = target.Model
+	w.Header().Set("x-airoute-provider-id", target.Provider.ID)
+	w.Header().Set("x-airoute-model", target.Model)
 	record.Status = upstream.StatusCode
 	if clientProtocol == target.Provider.Protocol {
 		record.Diagnostics = nil
@@ -498,10 +646,12 @@ func (g *Gateway) do(ctx context.Context, p config.Provider, payload []byte, str
 			req.Header.Set(k, v)
 		}
 	}
+	g.clientMu.RLock()
 	client := g.RestrictedClient
 	if p.AllowPrivateURL {
 		client = g.Client
 	}
+	g.clientMu.RUnlock()
 	resp, err := client.Do(req)
 	if err != nil {
 		cancel()

@@ -121,13 +121,17 @@ func serve(args []string) error {
 	if err != nil {
 		return err
 	}
+	if err = os.Chmod(*path, 0600); err != nil {
+		return fmt.Errorf("secure configuration permissions: %w", err)
+	}
 	store := config.NewStore(c)
 	logs := observe.NewStore(c.Logging.RequestHistory)
 	logs.SetFile(c.Logging.File)
 	metrics := &observe.Metrics{}
-	logger := newLogger(c)
+	logger, levelController := newLogger(c)
 	reg := registry()
 	gw := gateway.New(store, reg, logs, metrics, logger)
+	gw.SetLogLevelController(levelController)
 	gatewayURL := "http://" + externalHost(c.Server.Listen)
 	adm := admin.New(store, reg, logs, metrics, version, gatewayURL)
 	adm.SetGatewayControl(gw)
@@ -155,18 +159,20 @@ func serve(args []string) error {
 	signal.Notify(sig, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 	watchCtx, cancelWatch := context.WithCancel(context.Background())
 	defer cancelWatch()
-	go watchConfig(watchCtx, *path, store, logger)
+	go watchConfig(watchCtx, *path, store, logger, gw.ApplyRuntimeConfig)
 	for {
 		select {
 		case e := <-errCh:
 			return e
 		case s := <-sig:
 			if s == syscall.SIGHUP {
+				previous := store.Get()
 				next, e := config.Load(*path)
 				if e != nil {
 					store.SetError(e)
 					logger.Error("config reload failed", "error", e)
 				} else {
+					gw.ApplyRuntimeConfig(previous, next)
 					store.Replace(next)
 					logger.Info("configuration reloaded", "hash", next.Hash)
 				}
@@ -182,10 +188,10 @@ func serve(args []string) error {
 		}
 	}
 }
-func watchConfig(ctx context.Context, path string, store *config.Store, logger *slog.Logger) {
-	watchConfigEvery(ctx, path, store, logger, 2*time.Second)
+func watchConfig(ctx context.Context, path string, store *config.Store, logger *slog.Logger, apply ...func(*config.Config, *config.Config)) {
+	watchConfigEvery(ctx, path, store, logger, 2*time.Second, apply...)
 }
-func watchConfigEvery(ctx context.Context, path string, store *config.Store, logger *slog.Logger, interval time.Duration) {
+func watchConfigEvery(ctx context.Context, path string, store *config.Store, logger *slog.Logger, interval time.Duration, apply ...func(*config.Config, *config.Config)) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	last := store.Get().Hash
@@ -200,6 +206,12 @@ func watchConfigEvery(ctx context.Context, path string, store *config.Store, log
 				continue
 			}
 			if c.Hash != last {
+				previous := store.Get()
+				for _, applyRuntime := range apply {
+					if applyRuntime != nil {
+						applyRuntime(previous, c)
+					}
+				}
 				store.Replace(c)
 				last = c.Hash
 				logger.Info("configuration hot reloaded", "hash", c.Hash)
@@ -495,7 +507,7 @@ func ui(args []string) error {
 	}
 	return cmd.Start()
 }
-func newLogger(c *config.Config) *slog.Logger {
+func newLogger(c *config.Config) (*slog.Logger, *slog.LevelVar) {
 	level := slog.LevelInfo
 	switch c.Logging.Level {
 	case "debug":
@@ -505,11 +517,13 @@ func newLogger(c *config.Config) *slog.Logger {
 	case "error":
 		level = slog.LevelError
 	}
-	var h slog.Handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+	levelController := &slog.LevelVar{}
+	levelController.Set(level)
+	var h slog.Handler = slog.NewJSONHandler(os.Stderr, &slog.HandlerOptions{Level: levelController})
 	if c.Logging.Format == "text" {
-		h = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: level})
+		h = slog.NewTextHandler(os.Stderr, &slog.HandlerOptions{Level: levelController})
 	}
-	return slog.New(h)
+	return slog.New(h), levelController
 }
 func externalHost(addr string) string {
 	h, p, e := net.SplitHostPort(addr)

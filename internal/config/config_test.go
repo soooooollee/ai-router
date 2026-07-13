@@ -30,6 +30,10 @@ default_route:
 	if c.Providers[0].APIKey != "secret" {
 		t.Fatal("environment variable was not expanded")
 	}
+	storage, err := ProviderSecretStorage(p)
+	if err != nil || storage["p"].Mode != "environment" || storage["p"].Reference != "TEST_KEY" {
+		t.Fatalf("environment storage metadata is wrong: %#v (%v)", storage, err)
+	}
 	if c.Server.MaxBodySize != 32<<20 {
 		t.Fatalf("unexpected max body size %d", c.Server.MaxBodySize)
 	}
@@ -64,6 +68,10 @@ default_route:
 	}
 	if c.Providers[0].APIKey != "literal-secret" {
 		t.Fatal("literal provider API key was not loaded")
+	}
+	storage, err := ProviderSecretStorage(p)
+	if err != nil || storage["p"].Mode != "plaintext" || storage["p"].Reference != "" {
+		t.Fatalf("plaintext storage metadata is wrong: %#v (%v)", storage, err)
 	}
 }
 

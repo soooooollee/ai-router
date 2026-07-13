@@ -14,6 +14,14 @@ const (
 	ProfileXiaomiMiMo = "xiaomi-mimo"
 )
 
+type Capabilities struct {
+	NativeTokenCount bool `json:"native_token_count"`
+}
+
+func ProviderCapabilities(p config.Provider, _ string) Capabilities {
+	return Capabilities{NativeTokenCount: p.Protocol == ir.Anthropic}
+}
+
 func EffectiveProfile(p config.Provider, model string) string {
 	if p.Profile != "" && p.Profile != ProfileGeneric {
 		return p.Profile
