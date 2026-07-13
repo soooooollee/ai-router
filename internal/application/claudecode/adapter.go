@@ -120,15 +120,8 @@ func managedState(settings map[string]any) map[string]any {
 	managed := map[string]any{}
 	for _, key := range managedEnvKeys {
 		if value, ok := env[key].(string); ok && value != "" {
-			if key == "ANTHROPIC_API_KEY" {
-				managed["api_key_set"] = true
-			} else {
-				managed[key] = value
-			}
+			managed[key] = value
 		}
-	}
-	if _, ok := managed["api_key_set"]; !ok {
-		managed["api_key_set"] = false
 	}
 	return managed
 }
@@ -265,36 +258,15 @@ func (a *Adapter) compose(raw json.RawMessage) (composedConfig, error) {
 	return composedConfig{path: path, previous: previous, next: next, preserved: len(settings)}, nil
 }
 
-func redactSettings(raw []byte) []byte {
-	if len(bytes.TrimSpace(raw)) == 0 {
-		return raw
-	}
-	var settings map[string]any
-	if json.Unmarshal(raw, &settings) != nil {
-		return raw
-	}
-	env, _ := settings["env"].(map[string]any)
-	if value, ok := env["ANTHROPIC_API_KEY"].(string); ok && value != "" {
-		env["ANTHROPIC_API_KEY"] = "••••••••"
-	}
-	redacted, err := marshalSettings(settings)
-	if err != nil {
-		return raw
-	}
-	return redacted
-}
-
 func (a *Adapter) Preview(_ context.Context, raw json.RawMessage) (application.Preview, error) {
 	composed, err := a.compose(raw)
 	if err != nil {
 		return application.Preview{}, err
 	}
-	previous := redactSettings(composed.previous)
-	next := redactSettings(composed.next)
 	return application.Preview{
 		Path:             composed.path,
-		Content:          json.RawMessage(next),
-		Diff:             lineDiff(previous, next),
+		Content:          json.RawMessage(composed.next),
+		Diff:             lineDiff(composed.previous, composed.next),
 		PreservedFields:  composed.preserved,
 		WillCreateBackup: len(composed.previous) > 0,
 	}, nil

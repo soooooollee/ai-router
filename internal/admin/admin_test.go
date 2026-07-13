@@ -92,8 +92,8 @@ logging:
 	resp = request("GET", "/api/providers", nil, "")
 	providerBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(providerBody, []byte(`"key_storage":"environment"`)) || !bytes.Contains(providerBody, []byte(`"key_reference":"TEST_PROVIDER_KEY"`)) || bytes.Contains(providerBody, []byte("provider-secret")) {
-		t.Fatalf("provider secret metadata is wrong or leaked a value: %s", providerBody)
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(providerBody, []byte(`"api_key":"provider-secret"`)) {
+		t.Fatalf("provider API key was not returned to the local management UI: %s", providerBody)
 	}
 	resp = request("GET", "/api/diagnostics", nil, "")
 	diagnosticBody, _ := io.ReadAll(resp.Body)
@@ -164,6 +164,99 @@ logging:
 		t.Fatalf("static UI unavailable: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestRedactLogBodyForWebDisplay(t *testing.T) {
+	raw := `{"api_key":"visible-on-disk","messages":[{"role":"user","content":"hello"}],"nested":{"access_token":"token-value","input_tokens":42}}`
+	redacted := redactLogBody(raw)
+	if strings.Contains(redacted, "visible-on-disk") || strings.Contains(redacted, "token-value") || !strings.Contains(redacted, "hello") || !strings.Contains(redacted, "••••••••") || !strings.Contains(redacted, `"input_tokens":42`) {
+		t.Fatalf("unexpected web redaction: %s", redacted)
+	}
+}
+
+func TestWebRedactionCoversProvidersAndPreservesSecretsOnSave(t *testing.T) {
+	t.Setenv("WEB_REDACTION_ADMIN_TOKEN", "12345678901234567890123456789012")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "airoute.yaml")
+	raw := `version: 1
+server:
+  admin_listen: 127.0.0.1:8081
+admin:
+  enabled: true
+  token: ${WEB_REDACTION_ADMIN_TOKEN}
+providers:
+  - id: private-provider
+    name: Private Provider
+    protocol: openai-chat
+    base_url: https://example.com/v1
+    api_key: plaintext-provider-secret
+    models: [model]
+default_route:
+  targets: [{provider: private-provider, model: model}]
+logging:
+  level: info
+  web_redaction: true
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(config.NewStore(current), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "http://127.0.0.1:8080"))
+	defer server.Close()
+
+	get := func(endpoint string) []byte {
+		request, _ := http.NewRequest(http.MethodGet, server.URL+endpoint, nil)
+		request.Header.Set("authorization", "Bearer 12345678901234567890123456789012")
+		response, requestErr := http.DefaultClient.Do(request)
+		if requestErr != nil {
+			t.Fatal(requestErr)
+		}
+		defer response.Body.Close()
+		body, _ := io.ReadAll(response.Body)
+		if response.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: %d %s", endpoint, response.StatusCode, body)
+		}
+		return body
+	}
+	providerBody := get("/api/providers")
+	if bytes.Contains(providerBody, []byte("plaintext-provider-secret")) || !bytes.Contains(providerBody, []byte(webRedactionMask)) {
+		t.Fatalf("provider key was not redacted: %s", providerBody)
+	}
+	configBody := get("/api/config")
+	if bytes.Contains(configBody, []byte("plaintext-provider-secret")) || !bytes.Contains(configBody, []byte(webRedactionMask)) {
+		t.Fatalf("complete config was not redacted: %s", configBody)
+	}
+	var response struct {
+		YAML string `json:"yaml"`
+		Hash string `json:"hash"`
+	}
+	if err = json.Unmarshal(configBody, &response); err != nil {
+		t.Fatal(err)
+	}
+	edited := strings.Replace(response.YAML, "level: info", "level: debug", 1)
+	payload, _ := json.Marshal(map[string]any{"yaml": edited, "expected_hash": response.Hash})
+	request, _ := http.NewRequest(http.MethodPut, server.URL+"/api/config", bytes.NewReader(payload))
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("authorization", "Bearer 12345678901234567890123456789012")
+	saveResponse, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveBody, _ := io.ReadAll(saveResponse.Body)
+	_ = saveResponse.Body.Close()
+	if saveResponse.StatusCode != http.StatusOK {
+		t.Fatalf("save failed: %d %s", saveResponse.StatusCode, saveBody)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(written, []byte("plaintext-provider-secret")) || bytes.Contains(written, []byte(webRedactionMask)) || !bytes.Contains(written, []byte("level: debug")) {
+		t.Fatalf("secret was not preserved during masked save: %s", written)
+	}
 }
 
 func TestDetectProviderBeforeSave(t *testing.T) {
@@ -269,17 +362,17 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	}
 
 	resp, body := request(http.MethodGet, "/api/apps", "")
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) {
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) {
 		t.Fatalf("application list failed (%d): %s", resp.StatusCode, body)
 	}
 	resp, body = request(http.MethodGet, "/api/apps/claude-code", "")
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"api_key_set":true`)) || bytes.Contains(body, []byte("must-not-leak")) {
-		t.Fatalf("application state is invalid or leaked a secret (%d): %s", resp.StatusCode, body)
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ANTHROPIC_API_KEY":"must-not-leak"`)) {
+		t.Fatalf("application state does not expose the local API key (%d): %s", resp.StatusCode, body)
 	}
 
 	payload := `{"base_url":"http://127.0.0.1:8080","api_key":"local-key","model":"mimo","sonnet_model":"mimo"}`
 	resp, body = request(http.MethodPost, "/api/apps/claude-code/preview", payload)
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"will_create_backup":true`)) || !bytes.Contains(body, []byte(`"theme"`)) || bytes.Contains(body, []byte("local-key")) || bytes.Contains(body, []byte("must-not-leak")) {
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"will_create_backup":true`)) || !bytes.Contains(body, []byte(`"theme"`)) || !bytes.Contains(body, []byte("local-key")) {
 		t.Fatalf("application preview failed (%d): %s", resp.StatusCode, body)
 	}
 	resp, body = request(http.MethodPut, "/api/apps/claude-code/config", payload)
@@ -309,6 +402,64 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	resp, body = request(http.MethodGet, "/api/apps/unknown", "")
 	if resp.StatusCode != http.StatusNotFound {
 		t.Fatalf("unknown application should return 404, got %d: %s", resp.StatusCode, body)
+	}
+}
+
+func TestApplicationWebRedactionFollowsSettingAndPreservesKey(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	t.Setenv("AIROUTE_CLAUDE_SETTINGS_PATH", path)
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"dark","env":{"ANTHROPIC_API_KEY":"real-local-key","ANTHROPIC_MODEL":"old-model"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &config.Config{
+		Admin:   config.Admin{Enabled: true, Token: "test-admin-token-1234567890"},
+		Logging: config.Logging{WebRedaction: true},
+	}
+	ts := httptest.NewServer(New(config.NewStore(c), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "http://127.0.0.1:8080"))
+	defer ts.Close()
+
+	request := func(method, endpoint, payload string) (*http.Response, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(method, ts.URL+endpoint, strings.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("content-type", "application/json")
+		req.Header.Set("authorization", "Bearer test-admin-token-1234567890")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, body
+	}
+
+	resp, body := request(http.MethodGet, "/api/apps/claude-code", "")
+	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte("real-local-key")) || !bytes.Contains(body, []byte(webRedactionMask)) {
+		t.Fatalf("application state did not follow web redaction (%d): %s", resp.StatusCode, body)
+	}
+	payload := `{"base_url":"http://127.0.0.1:8080","api_key":"••••••••","model":"new-model"}`
+	resp, body = request(http.MethodPost, "/api/apps/claude-code/preview", payload)
+	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte("real-local-key")) || !bytes.Contains(body, []byte(webRedactionMask)) {
+		t.Fatalf("application preview did not follow web redaction (%d): %s", resp.StatusCode, body)
+	}
+	resp, body = request(http.MethodPut, "/api/apps/claude-code/config", payload)
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("application save failed (%d): %s", resp.StatusCode, body)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(written, []byte("real-local-key")) || !bytes.Contains(written, []byte("new-model")) || bytes.Contains(written, []byte(webRedactionMask)) {
+		t.Fatalf("masked application save did not preserve the real key: %s", written)
 	}
 }
 

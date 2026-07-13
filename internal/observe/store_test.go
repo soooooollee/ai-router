@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 func TestBoundedStoreAndJSONL(t *testing.T) {
@@ -24,6 +25,21 @@ func TestBoundedStoreAndJSONL(t *testing.T) {
 	}
 	if bytes.Count(raw, []byte("\n")) != 3 {
 		t.Fatalf("unexpected JSONL %s", raw)
+	}
+}
+
+func TestConfigureReloadsPersistedJSONL(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "requests.jsonl")
+	first := NewStore(3)
+	first.Configure(3, file)
+	first.Add(Record{ID: "persisted-1", StartedAt: time.Now().Add(-time.Second)})
+	first.Add(Record{ID: "persisted-2", StartedAt: time.Now()})
+
+	reloaded := NewStore(3)
+	reloaded.Configure(3, file)
+	records := reloaded.List(10)
+	if len(records) != 2 || records[0].ID != "persisted-2" || records[1].ID != "persisted-1" {
+		t.Fatalf("persisted records were not reloaded: %#v", records)
 	}
 }
 

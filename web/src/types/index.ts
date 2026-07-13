@@ -44,8 +44,7 @@ export type Provider = {
   base_url: string;
   models: string[];
   api_key_set: boolean;
-  key_storage?: "environment" | "plaintext" | "missing";
-  key_reference?: string;
+  api_key?: string;
   health?: { ok: boolean; latency_ms?: number; checked_at?: string };
 };
 export type RouteConfig = {
@@ -70,6 +69,7 @@ export type AppConfig = {
   providers: Provider[];
   routes: RouteConfig[];
   auth?: { enabled?: boolean };
+  logging?: { web_redaction?: boolean };
   default_route?: { targets: { provider: string; model: string }[] };
 };
 export type ApplicationCapability =
@@ -125,5 +125,44 @@ export type ApplicationVerifyResult = {
     message: string;
     detail?: string;
     latency_ms?: number;
+  }[];
+};
+export type Usage = {
+  input_tokens?: number;
+  output_tokens?: number;
+  total_tokens?: number;
+  cached_tokens?: number;
+  reasoning_tokens?: number;
+};
+export type LogRecord = {
+  id: string;
+  started_at: string;
+  client_protocol: string;
+  requested_model: string;
+  route_id: string;
+  provider_id: string;
+  upstream_protocol?: string;
+  resolved_model: string;
+  status: number;
+  duration_ms: number;
+  first_token_ms?: number;
+  usage?: Usage;
+  error_code?: string;
+  request_body?: string;
+  response_body?: string;
+  attempts?: {
+    number: number;
+    provider_id: string;
+    model: string;
+    status: number;
+    error?: string;
+    duration_ms: number;
+  }[];
+  diagnostics?: {
+    severity: string;
+    code: string;
+    path?: string;
+    message: string;
+    action: string;
   }[];
 };

@@ -1,8 +1,42 @@
 import React, { useState } from "react";
-import { Activity, Check, Save } from "lucide-react";
+import { Activity, Check, Save, TriangleAlert } from "lucide-react";
 import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
 import { protocolName } from "../../lib";
+
+function isPrivateProviderURL(value: string) {
+  try {
+    const hostname = new URL(value).hostname.toLowerCase().replace(/^\[|\]$/g, "");
+    if (
+      hostname === "localhost" ||
+      hostname.endsWith(".localhost") ||
+      hostname === "::" ||
+      hostname === "::1" ||
+      hostname.startsWith("fc") ||
+      hostname.startsWith("fd") ||
+      hostname.startsWith("fe8") ||
+      hostname.startsWith("fe9") ||
+      hostname.startsWith("fea") ||
+      hostname.startsWith("feb")
+    ) {
+      return true;
+    }
+    const parts = hostname.split(".").map(Number);
+    if (parts.length !== 4 || parts.some((part) => !Number.isInteger(part))) {
+      return false;
+    }
+    return (
+      parts[0] === 0 ||
+      parts[0] === 10 ||
+      parts[0] === 127 ||
+      (parts[0] === 169 && parts[1] === 254) ||
+      (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) ||
+      (parts[0] === 192 && parts[1] === 168)
+    );
+  } catch {
+    return false;
+  }
+}
 
 export function ProviderDialog({
   yaml,
@@ -46,8 +80,14 @@ export function ProviderDialog({
   } | null>(
     existing === null ? null : { ok: true, label: protocolName(form.protocol) },
   );
+  const privateURL = isPrivateProviderURL(form.base_url);
 
   async function detect() {
+    if (privateURL && !form.allow_private_url) {
+      setError("检测到本机或局域网地址，请先确认允许 AI Router 访问该模型服务");
+      setDetection({ ok: false });
+      return;
+    }
     setDetecting(true);
     setError("");
     setDetection(null);
@@ -171,7 +211,15 @@ export function ProviderDialog({
               placeholder="https://api.example.com/v1"
               value={form.base_url}
               onChange={(e) => {
-                setForm({ ...form, base_url: e.target.value });
+                const baseURL = e.target.value;
+                setForm({
+                  ...form,
+                  base_url: baseURL,
+                  allow_private_url: isPrivateProviderURL(baseURL)
+                    ? form.allow_private_url
+                    : false,
+                });
+                setError("");
                 setDetection(null);
               }}
             />
@@ -179,7 +227,7 @@ export function ProviderDialog({
           <label>
             API Key
             <input
-              type="password"
+              type="text"
               placeholder="sk-..."
               value={form.api_key}
               onChange={(e) => {
@@ -188,11 +236,9 @@ export function ProviderDialog({
               }}
             />
             <small className="secret-storage-hint">
-              {/^\$\{[A-Za-z_][A-Za-z0-9_]*\}$/.test(form.api_key)
-                ? `环境变量模式：${form.api_key.slice(2, -1)}`
-                : form.api_key
-                  ? "本地便利模式：明文保存到 0600 配置和备份"
-                  : "支持直接密钥，或填写 ${ENV_NAME} 使用环境变量"}
+              {form.api_key
+                ? "密钥将明文保存到本机 0600 配置和备份中"
+                : "请输入模型服务的 API Key"}
             </small>
           </label>
           <label>
@@ -206,16 +252,27 @@ export function ProviderDialog({
               }}
             />
           </label>
-          <label className="check-label private-switch">
-            <input
-              type="checkbox"
-              checked={form.allow_private_url}
-              onChange={(e) =>
-                setForm({ ...form, allow_private_url: e.target.checked })
-              }
-            />
-            允许访问本机或私网地址
-          </label>
+          {privateURL && (
+            <div className="private-url-confirmation" role="alert">
+              <TriangleAlert size={17} />
+              <div>
+                <b>检测到本机或局域网模型服务</b>
+                <span>该地址只能访问当前电脑或所在局域网，请确认这是你信任的模型服务。</span>
+                <label className="check-label private-switch">
+                  <input
+                    type="checkbox"
+                    aria-label="确认访问本机或私网模型服务"
+                    checked={form.allow_private_url}
+                    onChange={(e) => {
+                      setForm({ ...form, allow_private_url: e.target.checked });
+                      setError("");
+                    }}
+                  />
+                  我确认允许 AI Router 访问这个地址
+                </label>
+              </div>
+            </div>
+          )}
         </div>
         <button className="detect-button" onClick={detect} disabled={detecting}>
           <Activity size={16} />

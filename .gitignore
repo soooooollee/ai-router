@@ -12,3 +12,4 @@
 .env
 airoute.yaml
 airoute.yaml.bak.*
+/examples/*.yaml.bak.*
