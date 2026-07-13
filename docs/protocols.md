@@ -12,7 +12,7 @@ POST /v1beta/models/{model}:streamGenerateContent
 GET  /v1/models
 ```
 
-`count_tokens` 返回本地估算值并带 `estimated: true`，不会产生上游费用。
+`count_tokens` 会按实际路由选择目标：Anthropic 兼容 Provider 声明原生计数能力时，AI Router 转发到其 `/messages/count_tokens` 并返回 `estimated: false`、Provider 和模型；原生接口不可用时自动退回本地 `unicode-lexical-v1` 估算，返回 `estimated: true` 以及 instructions、messages、tools、media 拆分。计数失败不会影响普通生成请求。是否产生供应商侧请求取决于目标 Provider 的原生计数接口。
 
 ## Canonical IR
 

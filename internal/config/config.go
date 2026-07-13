@@ -146,6 +146,56 @@ type Metrics struct {
 var envPattern = regexp.MustCompile(`\$\{([A-Za-z_][A-Za-z0-9_]*)(?::-([^}]*))?\}`)
 var secretRefPattern = regexp.MustCompile(`^\$\{[A-Za-z_][A-Za-z0-9_]*\}$`)
 
+func SecretStorage(value string) (mode, reference string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "missing", ""
+	}
+	if secretRefPattern.MatchString(value) {
+		return "environment", strings.TrimSuffix(strings.TrimPrefix(value, "${"), "}")
+	}
+	return "plaintext", ""
+}
+
+func ResolveSecretInput(value string) (string, error) {
+	mode, reference := SecretStorage(value)
+	if mode != "environment" {
+		return value, nil
+	}
+	resolved, ok := os.LookupEnv(reference)
+	if !ok || resolved == "" {
+		return "", fmt.Errorf("missing environment variable: %s", reference)
+	}
+	return resolved, nil
+}
+
+type SecretInfo struct {
+	Mode      string
+	Reference string
+}
+
+func ProviderSecretStorage(path string) (map[string]SecretInfo, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	var document struct {
+		Providers []struct {
+			ID     string `yaml:"id"`
+			APIKey string `yaml:"api_key"`
+		} `yaml:"providers"`
+	}
+	if err = yaml.Unmarshal(raw, &document); err != nil {
+		return nil, err
+	}
+	out := make(map[string]SecretInfo, len(document.Providers))
+	for _, provider := range document.Providers {
+		mode, reference := SecretStorage(provider.APIKey)
+		out[provider.ID] = SecretInfo{Mode: mode, Reference: reference}
+	}
+	return out, nil
+}
+
 func Load(path string) (*Config, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {

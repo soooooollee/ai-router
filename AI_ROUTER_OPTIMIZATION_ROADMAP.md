@@ -1,6 +1,6 @@
 # AI Router 优化推进文档
 
-> 文档状态：可执行草案  
+> 文档状态：源码与本机验收完成；正式发布受外部门槛限制
 > 更新时间：2026-07-13  
 > 适用范围：AI Router 核心网关、Web 控制台、应用配置、配置安全与发行工程
 
@@ -18,9 +18,9 @@
 - Claude Code Token 统计仍是粗略估算。
 - Git、测试、文档和发行证据需要形成可信基线。
 
-## 2. 当前质量基线
+## 2. 改造前质量基线
 
-截至本文档编写时，本地检查结果如下：
+以下数据是 2026-07-13 开始改造时的对照基线，不代表完成后的当前状态：
 
 - `go test ./...`：通过。
 - `go test -race ./...`：通过。
@@ -35,7 +35,7 @@
 - 当前生产 Web JavaScript 约 920 KB，构建后 gzip 约 297 KB。
 - `web/src/main.tsx` 约 2918 行。
 - `web/src/styles.css` 约 5464 行，并存在多代覆盖样式。
-- 仓库当前尚未形成首个可信 Git 基线，文件仍处于未跟踪状态。
+- 改造开始时仓库尚未形成首个可信 Git 基线，文件仍处于未跟踪状态。
 
 上述结果说明核心网关不是原型代码，但产品扩展层和前端工程需要尽快收敛。
 
@@ -576,11 +576,18 @@ npm audit --audit-level=high --prefix web
 - 应用配置具备可见的备份与回滚能力。
 - Git、CI、E2E、Race、跨平台和发布文档形成完整证据链。
 
-## 10. 下一步
+## 10. 原始启动顺序（已完成）
 
-建议立即从以下三个任务开始：
+本轮按以下三个任务启动，现均已完成：
 
 1. 建立 Git 基线并轮换测试密钥。
 2. 创建 `internal/application` 和 Claude Code Adapter。
 3. 为现有应用配置流程补充独立 E2E，再开始前端拆分。
 
+## 11. 2026-07-13 执行结果
+
+阶段 0–8 的源码、前端、测试、文档和本机发布门禁已经完成。最终实现包括通用 Application Adapter、Claude Code L1–L4、统一原子备份回滚、四页控制台与路由级拆包、配置生效分类、双密钥模式、Provider 原生 Token Count 与本地估算回退，以及五个独立 E2E。
+
+本机已通过全包 Race、Vet、六平台交叉构建、5/5 Web E2E、npm/Go 漏洞检查、Docker 非 root Smoke、Qwen/MiMo 文本/流式/Tool Calling、Claude Code 真实验证和 60 秒 395,500 条并发流长稳。逐项证据见 [`docs/acceptance.md`](docs/acceptance.md) 和 [`docs/verification.md`](docs/verification.md)。
+
+正式公开版本仍有三项非源码门槛，未完成前不得标记为已发布：供应商账户所有者轮换曾暴露的 Xiaomi/SiliconFlow Key；在具备远程仓库后运行 GitHub CI/Release Workflow；在预发布主机完成 24 小时 Race 长稳。仓库当前没有 Git Remote，代码无法替账户所有者执行 Key 撤销，因此这些项目被明确记录为发布阻断而不是伪造为通过。

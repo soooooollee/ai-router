@@ -589,8 +589,38 @@ func TestErrorNormalizationAuthAndCountTokens(t *testing.T) {
 	}
 	raw, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != 200 || !strings.Contains(string(raw), "input_tokens") {
+	if resp.StatusCode != 200 || !strings.Contains(string(raw), `"input_tokens"`) || !strings.Contains(string(raw), `"estimated":true`) || !strings.Contains(string(raw), `"unicode-lexical-v1"`) {
 		t.Fatalf("count tokens failed: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestCountTokensUsesNativeProviderCapability(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/messages/count_tokens" || r.Header.Get("x-api-key") != "x" {
+			http.NotFound(w, r)
+			return
+		}
+		raw, _ := io.ReadAll(r.Body)
+		if !bytes.Contains(raw, []byte(`"model":"upstream-model"`)) || bytes.Contains(raw, []byte("max_tokens")) {
+			t.Fatalf("unexpected native payload: %s", raw)
+		}
+		_, _ = io.WriteString(w, `{"input_tokens":123}`)
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL+"/v1", ir.Anthropic)
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/messages/count_tokens", strings.NewReader(`{"model":"alias","system":"系统提示","messages":[{"role":"user","content":"hello"}]}`))
+	req.Header.Set("content-type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(raw, []byte(`"input_tokens":123`)) || !bytes.Contains(raw, []byte(`"estimated":false`)) || !bytes.Contains(raw, []byte(`"strategy":"provider-native"`)) {
+		t.Fatalf("native count response is wrong: %d %s", resp.StatusCode, raw)
 	}
 }
 
@@ -815,6 +845,26 @@ func allProtocols() []ir.Protocol {
 }
 func testConfig(base string, p ir.Protocol) *config.Config {
 	return &config.Config{Version: 1, Server: config.Server{Listen: "127.0.0.1:0", RequestTimeout: 2 * time.Second, MaxBodySize: 4 << 20, MaxConcurrent: 32}, Providers: []config.Provider{{ID: "target", Protocol: p, BaseURL: base, APIKey: "x", Models: []string{"upstream-model"}, Timeout: 2 * time.Second, AllowPrivateURL: true}}, DefaultRoute: &config.RouteTargetList{Targets: []config.RouteTarget{{Provider: "target", Model: "upstream-model"}}}, Conversion: config.Conversion{UnsupportedFields: "warn"}, Retry: config.Retry{MaxAttempts: 1, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, OnStatus: []int{429, 500, 502, 503, 504}}, Metrics: config.Metrics{Path: "/metrics"}}
+}
+
+func TestApplyRuntimeConfigResizesConcurrencyAndTransport(t *testing.T) {
+	previous := testConfig("https://example.com", ir.OpenAIChat)
+	previous.Server.MaxConcurrent = 32
+	next := *previous
+	next.Server.MaxConcurrent = 3
+	next.Logging.Level = "debug"
+	g := gateway.New(config.NewStore(previous), testRegistry(), observe.NewStore(1), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	level := &slog.LevelVar{}
+	level.Set(slog.LevelInfo)
+	g.SetLogLevelController(level)
+	g.ApplyRuntimeConfig(previous, &next)
+	limit, idle := g.RuntimeLimits()
+	if limit != 3 || idle != 3 {
+		t.Fatalf("runtime objects were not rebuilt: concurrent=%d idle=%d", limit, idle)
+	}
+	if level.Level() != slog.LevelDebug {
+		t.Fatalf("log level was not hot reloaded: %v", level.Level())
+	}
 }
 func pathProtocol(p string) ir.Protocol {
 	switch {

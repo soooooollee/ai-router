@@ -20,6 +20,8 @@ import (
 	"sync"
 	"time"
 
+	"github.com/zbss/airoute/internal/application"
+	"github.com/zbss/airoute/internal/application/claudecode"
 	"github.com/zbss/airoute/internal/auth"
 	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/observe"
@@ -28,6 +30,7 @@ import (
 	"github.com/zbss/airoute/internal/protocol/ir"
 	providerprofile "github.com/zbss/airoute/internal/provider"
 	"github.com/zbss/airoute/internal/routing"
+	"github.com/zbss/airoute/internal/safefile"
 	"github.com/zbss/airoute/internal/secure"
 )
 
@@ -44,6 +47,7 @@ type Server struct {
 	GatewayURL       string
 	Client           *http.Client
 	RestrictedClient *http.Client
+	Applications     *application.Registry
 	failureMu        sync.Mutex
 	failures         map[string][]time.Time
 	healthMu         sync.RWMutex
@@ -51,12 +55,13 @@ type Server struct {
 	GatewayControl   interface {
 		SetEnabled(bool)
 		IsEnabled() bool
+		ApplyRuntimeConfig(*config.Config, *config.Config)
 	}
 }
 
 func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Metrics, version, gatewayURL string) *Server {
 	restrictedTransport := &http.Transport{Proxy: nil, DialContext: secure.PublicDialContext, ResponseHeaderTimeout: 30 * time.Second}
-	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
+	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudecode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
 }
 func (s *Server) CloseIdleConnections() {
 	s.Client.CloseIdleConnections()
@@ -66,6 +71,7 @@ func (s *Server) CloseIdleConnections() {
 func (s *Server) SetGatewayControl(control interface {
 	SetEnabled(bool)
 	IsEnabled() bool
+	ApplyRuntimeConfig(*config.Config, *config.Config)
 }) {
 	s.GatewayControl = control
 }
@@ -140,7 +146,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		if s.GatewayControl != nil && !s.GatewayControl.IsEnabled() {
 			status = "stopped"
 		}
-		jsonOut(w, 200, map[string]any{"status": status, "version": s.Version, "uptime_seconds": int(time.Since(s.Started).Seconds()), "config_version": c.Hash, "config_error": s.Config.LastError(), "gateway_url": s.GatewayURL, "providers": len(c.Providers), "routes": len(c.Routes), "provider_health": s.providerHealth(), "metrics": summary(s.Metrics, s.Logs)})
+		jsonOut(w, 200, map[string]any{"status": status, "runtime_state_persistent": false, "version": s.Version, "uptime_seconds": int(time.Since(s.Started).Seconds()), "config_version": c.Hash, "config_error": s.Config.LastError(), "gateway_url": s.GatewayURL, "providers": len(c.Providers), "routes": len(c.Routes), "provider_health": s.providerHealth(), "metrics": summary(s.Metrics, s.Logs)})
 	case r.URL.Path == "/api/runtime" && r.Method == "PUT":
 		if s.GatewayControl == nil {
 			jsonOut(w, 501, map[string]any{"error": "gateway runtime control is unavailable"})
@@ -154,9 +160,18 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		s.GatewayControl.SetEnabled(*in.Enabled)
-		jsonOut(w, 200, map[string]any{"ok": true, "status": map[bool]string{true: "running", false: "stopped"}[*in.Enabled]})
+		jsonOut(w, 200, map[string]any{"ok": true, "status": map[bool]string{true: "running", false: "stopped"}[*in.Enabled], "persistent": false, "message": "运行状态只对当前进程有效，进程重启后恢复运行"})
 	case r.URL.Path == "/api/config" && r.Method == "GET":
 		current := s.Config.Get()
+		info, statErr := os.Stat(current.SourcePath)
+		if statErr != nil {
+			apiError(w, 500, statErr)
+			return
+		}
+		if info.Mode().Perm()&0077 != 0 {
+			jsonOut(w, http.StatusForbidden, map[string]any{"error": "configuration file permissions are too broad; require 0600"})
+			return
+		}
 		raw, e := os.ReadFile(current.SourcePath)
 		if e != nil {
 			apiError(w, 500, e)
@@ -181,7 +196,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/config/rollback" && r.Method == "POST":
 		s.rollback(w, r)
 	case r.URL.Path == "/api/providers" && r.Method == "GET":
-		jsonOut(w, 200, map[string]any{"providers": publicProviders(s.Config.Get().Providers, s.providerHealth())})
+		jsonOut(w, 200, map[string]any{"providers": publicProviders(s.Config.Get(), s.providerHealth())})
 	case r.URL.Path == "/api/providers/detect" && r.Method == "POST":
 		s.detectProvider(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/providers/") && strings.HasSuffix(r.URL.Path, "/probe") && r.Method == "POST":
@@ -189,10 +204,12 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.probe(w, r, id)
 	case r.URL.Path == "/api/routes/explain" && (r.Method == "GET" || r.Method == "POST"):
 		s.explain(w, r)
+	case r.URL.Path == "/api/apps" || strings.HasPrefix(r.URL.Path, "/api/apps/"):
+		s.applicationAPI(w, r)
 	case r.URL.Path == "/api/claude-code/config" && r.Method == "GET":
-		s.claudeCodeConfig(w)
+		s.legacyClaudeCodeConfig(w, r)
 	case r.URL.Path == "/api/claude-code/config" && r.Method == "PUT":
-		s.saveClaudeCodeConfig(w, r)
+		s.legacyClaudeCodeConfig(w, r)
 	case r.URL.Path == "/api/playground/preview" && r.Method == "POST":
 		s.preview(w, r)
 	case r.URL.Path == "/api/logs" && r.Method == "GET":
@@ -240,6 +257,7 @@ func (s *Server) diagnostics(w http.ResponseWriter) {
 }
 
 func (s *Server) validate(w http.ResponseWriter, r *http.Request, save bool) {
+	previousConfig := s.Config.Get()
 	var in struct {
 		YAML         string `json:"yaml"`
 		ExpectedHash string `json:"expected_hash"`
@@ -283,38 +301,52 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request, save bool) {
 		return
 	}
 	target := s.Config.Get().SourcePath
-	backup := target + ".bak." + time.Now().UTC().Format("20060102T150405.000000000Z")
-	if raw, e := os.ReadFile(target); e == nil {
-		if e = os.WriteFile(backup, raw, 0600); e != nil {
-			apiError(w, 500, e)
-			return
-		}
-	}
-	if e = os.Rename(name, target); e != nil {
+	backup, e := safefile.Backup(target, ".bak.")
+	if e != nil {
 		apiError(w, 500, e)
 		return
 	}
-	_ = syncDirectory(dir)
+	if e = safefile.AtomicWrite(target, []byte(in.YAML), 0600); e != nil {
+		apiError(w, 500, e)
+		return
+	}
+	c, e = config.Load(target)
+	if e != nil {
+		if backup != "" {
+			if previous, readErr := os.ReadFile(backup); readErr == nil {
+				_ = safefile.AtomicWrite(target, previous, 0600)
+			}
+		}
+		apiError(w, 500, fmt.Errorf("saved configuration failed verification and was restored: %w", e))
+		return
+	}
 	c.SourcePath = target
+	effects := config.CompareEffects(previousConfig, c)
+	if s.GatewayControl != nil {
+		s.GatewayControl.ApplyRuntimeConfig(previousConfig, c)
+	}
+	if len(effects.RuntimeRebuilt) > 0 {
+		if s.GatewayControl == nil {
+			effects.RestartNeeded = append(effects.RestartNeeded, effects.RuntimeRebuilt...)
+			effects.RuntimeRebuilt = nil
+		}
+	}
 	s.Config.Replace(c)
-	pruneBackups(target, 10)
-	jsonOut(w, 200, map[string]any{"ok": true, "hash": c.Hash, "backup": filepath.Base(backup)})
+	_ = safefile.Prune(target, ".bak.", 10)
+	jsonOut(w, 200, map[string]any{"ok": true, "hash": c.Hash, "backup": filepath.Base(backup), "hot_reloaded": effects.HotReloaded, "runtime_rebuilt": effects.RuntimeRebuilt, "restart_required": effects.RestartNeeded})
 }
 
 func (s *Server) backups(w http.ResponseWriter) {
 	target := s.Config.Get().SourcePath
-	files, _ := filepath.Glob(target + ".bak.*")
-	sort.Sort(sort.Reverse(sort.StringSlice(files)))
+	entries, _ := safefile.List(target, ".bak.")
 	var out []any
-	for _, f := range files {
-		st, _ := os.Stat(f)
-		if st != nil {
-			out = append(out, map[string]any{"name": filepath.Base(f), "size": st.Size(), "modified": st.ModTime()})
-		}
+	for _, entry := range entries {
+		out = append(out, map[string]any{"name": entry.Name, "size": entry.Size, "modified": entry.ModifiedAt, "contains_sensitive_config": true})
 	}
 	jsonOut(w, 200, map[string]any{"backups": out})
 }
 func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
+	previousConfig := s.Config.Get()
 	var in struct {
 		Name string `json:"name"`
 	}
@@ -323,8 +355,8 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	target := s.Config.Get().SourcePath
-	source := filepath.Join(filepath.Dir(target), in.Name)
-	if !strings.HasPrefix(in.Name, filepath.Base(target)+".bak.") {
+	source, ok := safefile.ResolveBackup(target, ".bak.", in.Name)
+	if !ok {
 		jsonOut(w, 400, map[string]any{"error": "invalid backup name"})
 		return
 	}
@@ -333,25 +365,30 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 		apiError(w, 404, e)
 		return
 	}
-	tmp := target + ".rollback.tmp"
-	if e = writeSynced(tmp, raw); e != nil {
-		apiError(w, 500, e)
-		return
-	}
-	c, e := config.Load(tmp)
+	c, e := config.Load(source)
 	if e != nil {
-		os.Remove(tmp)
 		apiError(w, 422, e)
 		return
 	}
-	if e = os.Rename(tmp, target); e != nil {
+	if _, e = safefile.Backup(target, ".bak."); e != nil {
 		apiError(w, 500, e)
 		return
 	}
-	_ = syncDirectory(filepath.Dir(target))
+	if e = safefile.AtomicWrite(target, raw, 0600); e != nil {
+		apiError(w, 500, e)
+		return
+	}
 	c.SourcePath = target
+	effects := config.CompareEffects(previousConfig, c)
+	if s.GatewayControl != nil {
+		s.GatewayControl.ApplyRuntimeConfig(previousConfig, c)
+	} else if len(effects.RuntimeRebuilt) > 0 {
+		effects.RestartNeeded = append(effects.RestartNeeded, effects.RuntimeRebuilt...)
+		effects.RuntimeRebuilt = nil
+	}
 	s.Config.Replace(c)
-	jsonOut(w, 200, map[string]any{"ok": true, "hash": c.Hash})
+	_ = safefile.Prune(target, ".bak.", 10)
+	jsonOut(w, 200, map[string]any{"ok": true, "hash": c.Hash, "hot_reloaded": effects.HotReloaded, "runtime_rebuilt": effects.RuntimeRebuilt, "restart_required": effects.RestartNeeded})
 }
 
 func (s *Server) probe(w http.ResponseWriter, r *http.Request, id string) {
@@ -491,6 +528,11 @@ func (s *Server) detectProvider(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, 422, map[string]any{"error": "API 地址、密钥和至少一个模型名为必填项"})
 		return
 	}
+	resolvedAPIKey, resolveErr := config.ResolveSecretInput(in.APIKey)
+	if resolveErr != nil {
+		apiError(w, http.StatusUnprocessableEntity, resolveErr)
+		return
+	}
 	profile := detectProviderProfile(in.BaseURL, in.Models)
 	candidates := []ir.Protocol{ir.OpenAIChat, ir.Anthropic, ir.OpenAIResponses, ir.Gemini}
 	lowerBase := strings.ToLower(in.BaseURL)
@@ -502,7 +544,7 @@ func (s *Server) detectProvider(w http.ResponseWriter, r *http.Request) {
 	started := time.Now()
 	attempts := make([]map[string]any, 0, len(candidates))
 	for _, candidate := range candidates {
-		p := config.Provider{Protocol: candidate, BaseURL: in.BaseURL, APIKey: in.APIKey, Models: in.Models, AllowPrivateURL: in.AllowPrivateURL, Timeout: 30 * time.Second}
+		p := config.Provider{Protocol: candidate, BaseURL: in.BaseURL, APIKey: resolvedAPIKey, Models: in.Models, AllowPrivateURL: in.AllowPrivateURL, Timeout: 30 * time.Second}
 		status, err := s.minimalProviderTest(r.Context(), p)
 		attempt := map[string]any{"protocol": candidate, "status": status}
 		if err != nil {
@@ -552,141 +594,136 @@ func detectedProviderLabel(protocolName ir.Protocol, profile string) string {
 	}
 }
 
-var claudeRouterEnvKeys = []string{
-	"ANTHROPIC_BASE_URL",
-	"ANTHROPIC_API_KEY",
-	"ANTHROPIC_MODEL",
-	"ANTHROPIC_DEFAULT_OPUS_MODEL",
-	"ANTHROPIC_DEFAULT_SONNET_MODEL",
-	"ANTHROPIC_DEFAULT_HAIKU_MODEL",
-}
-
-func claudeSettingsPath() (string, error) {
-	if override := strings.TrimSpace(os.Getenv("AIROUTE_CLAUDE_SETTINGS_PATH")); override != "" {
-		return override, nil
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(home, ".claude", "settings.json"), nil
-}
-
-func readClaudeSettings(path string) (map[string]any, error) {
-	raw, err := os.ReadFile(path)
-	if os.IsNotExist(err) {
-		return map[string]any{}, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	settings := map[string]any{}
-	if len(bytes.TrimSpace(raw)) > 0 {
-		if err := json.Unmarshal(raw, &settings); err != nil {
-			return nil, fmt.Errorf("Claude Code 配置不是有效 JSON: %w", err)
-		}
-	}
-	return settings, nil
-}
-
-func (s *Server) claudeCodeConfig(w http.ResponseWriter) {
-	path, err := claudeSettingsPath()
-	if err != nil {
-		apiError(w, 500, err)
-		return
-	}
-	settings, err := readClaudeSettings(path)
-	if err != nil {
-		apiError(w, 422, err)
-		return
-	}
-	env, _ := settings["env"].(map[string]any)
-	result := map[string]any{}
-	for _, key := range claudeRouterEnvKeys {
-		if value, ok := env[key].(string); ok && value != "" {
-			if key == "ANTHROPIC_API_KEY" {
-				result["api_key_set"] = true
-			} else {
-				result[key] = value
-			}
-		}
-	}
-	jsonOut(w, 200, map[string]any{"path": path, "exists": len(settings) > 0, "router": result, "preserved_fields": len(settings)})
-}
-
-func (s *Server) saveClaudeCodeConfig(w http.ResponseWriter, r *http.Request) {
-	var in struct {
-		BaseURL     string `json:"base_url"`
-		APIKey      string `json:"api_key"`
-		Model       string `json:"model"`
-		OpusModel   string `json:"opus_model"`
-		SonnetModel string `json:"sonnet_model"`
-		HaikuModel  string `json:"haiku_model"`
-	}
-	if json.NewDecoder(io.LimitReader(r.Body, 128<<10)).Decode(&in) != nil || strings.TrimSpace(in.BaseURL) == "" || strings.TrimSpace(in.Model) == "" {
-		jsonOut(w, 422, map[string]any{"error": "网关地址和主模型为必填项"})
-		return
-	}
-	path, err := claudeSettingsPath()
-	if err != nil {
-		apiError(w, 500, err)
-		return
-	}
-	settings, err := readClaudeSettings(path)
-	if err != nil {
-		apiError(w, 422, err)
-		return
-	}
-	env, _ := settings["env"].(map[string]any)
-	if env == nil {
-		env = map[string]any{}
-	}
-	env["ANTHROPIC_BASE_URL"] = strings.TrimRight(in.BaseURL, "/")
-	if in.APIKey != "" {
-		env["ANTHROPIC_API_KEY"] = in.APIKey
-	} else if _, ok := env["ANTHROPIC_API_KEY"]; !ok {
-		env["ANTHROPIC_API_KEY"] = "airoute-local"
-	}
-	env["ANTHROPIC_MODEL"] = in.Model
-	roleModels := map[string]string{
-		"ANTHROPIC_DEFAULT_OPUS_MODEL":   in.OpusModel,
-		"ANTHROPIC_DEFAULT_SONNET_MODEL": in.SonnetModel,
-		"ANTHROPIC_DEFAULT_HAIKU_MODEL":  in.HaikuModel,
-	}
-	for key, value := range roleModels {
-		if value == "" {
-			delete(env, key)
-		} else {
-			env[key] = value
-		}
-	}
-	settings["env"] = env
-	raw, err := json.MarshalIndent(settings, "", "  ")
-	if err != nil {
-		apiError(w, 500, err)
-		return
-	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		apiError(w, 500, err)
-		return
-	}
-	if previous, readErr := os.ReadFile(path); readErr == nil {
-		backup := path + ".airoute.bak." + time.Now().Format("20060102-150405")
-		if err = os.WriteFile(backup, previous, 0600); err != nil {
-			apiError(w, 500, err)
+func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
+	if r.URL.Path == "/api/apps" {
+		if r.Method != http.MethodGet {
+			jsonOut(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
-	}
-	tmp := path + ".airoute.tmp"
-	if err = os.WriteFile(tmp, append(raw, '\n'), 0600); err == nil {
-		err = os.Rename(tmp, path)
-	}
-	if err != nil {
-		_ = os.Remove(tmp)
-		apiError(w, 500, err)
+		apps := make([]map[string]any, 0)
+		for _, adapter := range s.Applications.List() {
+			detection, err := adapter.Detect(r.Context())
+			if err != nil {
+				detection.Message = err.Error()
+			}
+			apps = append(apps, map[string]any{"manifest": adapter.Manifest(), "detection": detection})
+		}
+		jsonOut(w, http.StatusOK, map[string]any{"apps": apps})
 		return
 	}
-	jsonOut(w, 200, map[string]any{"ok": true, "path": path, "model": in.Model})
+
+	parts := strings.Split(strings.Trim(r.URL.Path, "/"), "/")
+	if len(parts) < 3 || parts[0] != "api" || parts[1] != "apps" {
+		jsonOut(w, http.StatusNotFound, map[string]any{"error": "application endpoint not found"})
+		return
+	}
+	adapter, err := s.Applications.Get(parts[2])
+	if err != nil {
+		apiError(w, http.StatusNotFound, err)
+		return
+	}
+	action := ""
+	if len(parts) > 3 {
+		action = parts[3]
+	}
+
+	switch {
+	case action == "" && r.Method == http.MethodGet:
+		state, readErr := adapter.Read(r.Context())
+		if readErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, readErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, state)
+	case action == "preview" && r.Method == http.MethodPost:
+		raw, readErr := io.ReadAll(io.LimitReader(r.Body, 256<<10))
+		if readErr != nil {
+			apiError(w, http.StatusBadRequest, readErr)
+			return
+		}
+		preview, previewErr := adapter.Preview(r.Context(), raw)
+		if previewErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, previewErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, preview)
+	case action == "config" && r.Method == http.MethodPut:
+		raw, readErr := io.ReadAll(io.LimitReader(r.Body, 256<<10))
+		if readErr != nil {
+			apiError(w, http.StatusBadRequest, readErr)
+			return
+		}
+		result, applyErr := adapter.Apply(r.Context(), raw)
+		if applyErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, applyErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, result)
+	case action == "verify" && r.Method == http.MethodPost:
+		var options application.VerifyOptions
+		decodeErr := json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&options)
+		if decodeErr != nil && decodeErr != io.EOF {
+			apiError(w, http.StatusBadRequest, decodeErr)
+			return
+		}
+		result, verifyErr := adapter.Verify(r.Context(), options)
+		if verifyErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, verifyErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, result)
+	case action == "backups" && r.Method == http.MethodGet:
+		backups, backupErr := adapter.Backups(r.Context())
+		if backupErr != nil {
+			apiError(w, http.StatusInternalServerError, backupErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, map[string]any{"backups": backups})
+	case action == "rollback" && r.Method == http.MethodPost:
+		var input struct {
+			Name string `json:"name"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input) != nil || input.Name == "" {
+			jsonOut(w, http.StatusBadRequest, map[string]any{"error": "backup name is required"})
+			return
+		}
+		result, rollbackErr := adapter.Rollback(r.Context(), input.Name)
+		if rollbackErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, rollbackErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, result)
+	default:
+		jsonOut(w, http.StatusNotFound, map[string]any{"error": "application endpoint not found"})
+	}
+}
+
+func (s *Server) legacyClaudeCodeConfig(w http.ResponseWriter, r *http.Request) {
+	adapter, err := s.Applications.Get("claude-code")
+	if err != nil {
+		apiError(w, http.StatusNotFound, err)
+		return
+	}
+	if r.Method == http.MethodGet {
+		state, readErr := adapter.Read(r.Context())
+		if readErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, readErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, map[string]any{"path": state.Path, "exists": state.Exists, "router": state.Managed, "preserved_fields": state.PreservedFields})
+		return
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(r.Body, 256<<10))
+	if readErr != nil {
+		apiError(w, http.StatusBadRequest, readErr)
+		return
+	}
+	result, applyErr := adapter.Apply(r.Context(), raw)
+	if applyErr != nil {
+		apiError(w, http.StatusUnprocessableEntity, applyErr)
+		return
+	}
+	jsonOut(w, http.StatusOK, result)
 }
 
 func (s *Server) setProviderHealth(id string, report map[string]any) {
@@ -951,10 +988,16 @@ func summary(m *observe.Metrics, logs *observe.Store) map[string]any {
 	}
 	return map[string]any{"requests": m.Requests.Load(), "errors": m.Errors.Load(), "in_flight": m.InFlight.Load(), "retries": m.Retries.Load(), "fallbacks": m.Fallbacks.Load(), "timeouts": m.Timeouts.Load(), "cancellations": m.Cancellations.Load(), "diagnostics": m.Diagnostics.Load(), "input_tokens": m.InputTokens.Load(), "output_tokens": m.OutputTokens.Load(), "average_latency_ms": avg, "p50_latency_ms": p50, "p95_latency_ms": p95}
 }
-func publicProviders(in []config.Provider, health map[string]map[string]any) []any {
-	out := make([]any, 0, len(in))
-	for _, p := range in {
-		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "profile": p.Profile, "protocol": p.Protocol, "base_url": p.BaseURL, "models": p.Models, "api_key_set": p.APIKey != "", "health": health[p.ID]})
+func publicProviders(current *config.Config, health map[string]map[string]any) []any {
+	secretStorage, _ := config.ProviderSecretStorage(current.SourcePath)
+	out := make([]any, 0, len(current.Providers))
+	for _, p := range current.Providers {
+		secret := secretStorage[p.ID]
+		mode := secret.Mode
+		if mode == "" {
+			mode, _ = config.SecretStorage(p.APIKey)
+		}
+		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "profile": p.Profile, "protocol": p.Protocol, "base_url": p.BaseURL, "models": p.Models, "api_key_set": p.APIKey != "", "key_storage": mode, "key_reference": secret.Reference, "health": health[p.ID]})
 	}
 	return out
 }
@@ -1027,41 +1070,6 @@ func detectProtocol(p config.Provider, body []byte) ir.Protocol {
 		return ir.OpenAIResponses
 	}
 	return p.Protocol
-}
-func pruneBackups(target string, keep int) {
-	files, _ := filepath.Glob(target + ".bak.*")
-	sort.Sort(sort.Reverse(sort.StringSlice(files)))
-	for _, f := range files[minimum(keep, len(files)):] {
-		_ = os.Remove(f)
-	}
-}
-func minimum(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-func writeSynced(path string, data []byte) error {
-	f, e := os.OpenFile(path, os.O_CREATE|os.O_TRUNC|os.O_WRONLY, 0600)
-	if e != nil {
-		return e
-	}
-	if _, e = f.Write(data); e == nil {
-		e = f.Sync()
-	}
-	closeErr := f.Close()
-	if e == nil {
-		e = closeErr
-	}
-	return e
-}
-func syncDirectory(path string) error {
-	d, e := os.Open(path)
-	if e != nil {
-		return e
-	}
-	defer d.Close()
-	return d.Sync()
 }
 func apiError(w http.ResponseWriter, status int, e error) {
 	jsonOut(w, status, map[string]any{"error": e.Error()})

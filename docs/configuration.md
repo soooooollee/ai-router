@@ -11,7 +11,9 @@ token: ${AIROUTE_ADMIN_TOKEN}
 
 缺少无默认值的环境变量时拒绝启动。管理 API 不返回解析后的值，Web 保存时仍保留原始表达式。
 
-`admin.token`、客户端 Key、Provider `api_key` 以及名称中带 authorization/key/token/cookie/secret 的敏感 Header 必须使用环境变量引用；为避免 Web 编辑器和备份泄密，配置加载器会拒绝这些字段中的明文密钥。
+Provider `api_key` 支持直接保存或环境变量引用。直接保存适合仅本机使用的便利模式，配置文件和备份会强制写为 `0600`，但仍应视为包含敏感信息；环境变量模式只在 YAML 中保存引用名称。管理 Token、客户端访问 Key，以及名称中带 authorization/key/token/cookie/secret 的敏感 Header 默认要求环境变量引用。
+
+模型列表只返回 `plaintext`、`environment` 或 `missing` 保存方式以及环境变量名称，不返回已解析的 API Key。设置页查看完整 YAML 时会显示敏感配置提示；原始配置文件权限过宽时，管理 API 会拒绝返回正文。
 
 ## Server
 
@@ -54,9 +56,17 @@ request_fields:
 
 未知供应商字段会进入 IR 的 `extensions`。同协议往返会恢复这些字段；跨协议时不会错误移植，并产生 `request_extensions_not_portable` 诊断。
 
-## 热加载
+## 配置生效方式
 
-服务每两秒检测文件内容 Hash，也响应 SIGHUP。只有完整解析和语义校验通过后才替换运行快照；进行中的请求不切换快照。
+服务每两秒检测文件内容 Hash，也响应 SIGHUP。只有完整解析和语义校验通过后才替换运行快照；进行中的请求不切换快照。Web 保存响应会把变更分为三类：
+
+- `hot_reloaded`：Provider、Route、Retry/Fallback、转换策略、鉴权、指标、Provider 超时、日志级别和历史配置等立即生效。
+- `runtime_rebuilt`：`server.max_concurrent` 会在线替换并发控制对象。
+- `restart_required`：监听地址、Header 读取器进程参数、管理面开关和日志格式已保存，但重启后生效。
+
+运行中开关只控制当前进程，不写入配置；关闭后网关返回 503，进程重启会恢复运行。控制台会明确显示“重启后恢复”。
+
+主配置与应用配置都使用同一原子写入流程：创建唯一备份、写临时文件、`fsync`、原子 Rename、重新读取校验，并保留最近 10 份应用备份。
 
 ## Schema
 

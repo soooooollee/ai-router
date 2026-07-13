@@ -1,0 +1,15 @@
+:root {
+  --bg: #f4f5f7;
+  --panel: #fff;
+  --panel2: #f8f9fb;
+  --line: #e2e5ea;
+  --muted: #737985;
+  --green: #4263eb;
+  --green2: #18864b;
+  --red: #d9485f;
+  --amber: #b7791f;
+  color: #1b1d22;
+  background: var(--bg);
+  font-family: Inter, "SF Pro Text", "PingFang SC", system-ui, sans-serif;
+  font-synthesis: none;
+}

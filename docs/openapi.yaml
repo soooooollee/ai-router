@@ -19,7 +19,7 @@ paths:
       responses:
         "200": { description: Configuration, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigEnvelope" } } } }
     put:
-      summary: 原子保存并热加载配置
+      summary: 原子保存配置并返回真实生效分类
       requestBody:
         required: true
         content:
@@ -31,7 +31,7 @@ paths:
                 yaml: { type: string }
                 expected_hash: { type: string }
       responses:
-        "200": { description: Saved }
+        "200": { description: Saved, content: { application/json: { schema: { $ref: "#/components/schemas/ConfigSaveResult" } } } }
         "409": { description: Configuration changed concurrently }
         "422": { description: Invalid configuration }
   /api/config/validate:
@@ -49,7 +49,7 @@ paths:
       responses: { "200": { description: Reloaded } }
   /api/config/backups:
     get:
-      summary: 列出配置备份
+      summary: 列出配置备份（标注是否可能包含本地明文密钥）
       responses: { "200": { description: Backups } }
   /api/config/rollback:
     post:
@@ -62,6 +62,98 @@ paths:
     get:
       summary: 获取脱敏 Provider 列表
       responses: { "200": { description: Providers } }
+  /api/apps:
+    get:
+      summary: 获取应用 Manifest、能力和安装检测结果
+      responses:
+        "200":
+          description: Applications
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [apps]
+                properties:
+                  apps:
+                    type: array
+                    items:
+                      type: object
+                      required: [manifest, detection]
+                      properties:
+                        manifest: { $ref: "#/components/schemas/ApplicationManifest" }
+                        detection: { $ref: "#/components/schemas/ApplicationDetection" }
+  /api/apps/{id}:
+    get:
+      summary: 读取应用检测状态和已脱敏的托管配置
+      parameters: [{ $ref: "#/components/parameters/ApplicationId" }]
+      responses:
+        "200": { description: Application state, content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationState" } } } }
+        "404": { description: Unknown application }
+        "422": { description: Invalid application configuration }
+  /api/apps/{id}/preview:
+    post:
+      summary: 预览结构化合并结果与脱敏 Diff，不写文件
+      parameters: [{ $ref: "#/components/parameters/ApplicationId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        "200": { description: Redacted preview, content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationPreview" } } } }
+        "422": { description: Invalid desired configuration }
+  /api/apps/{id}/config:
+    put:
+      summary: 原子写入应用配置并创建 0600 备份
+      parameters: [{ $ref: "#/components/parameters/ApplicationId" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object } } }
+      responses:
+        "200": { description: Applied, content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationApplyResult" } } } }
+        "422": { description: Apply failed }
+  /api/apps/{id}/verify:
+    post:
+      summary: 执行应用声明的分层验证；run_cli 只启用 Adapter 内置固定 Smoke
+      parameters: [{ $ref: "#/components/parameters/ApplicationId" }]
+      requestBody:
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                config: { type: object, description: 可选的待验证配置；不会写入文件 }
+                run_cli: { type: boolean, default: false }
+      responses:
+        "200": { description: Verification stages, content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationVerifyResult" } } } }
+        "422": { description: Verification could not be executed }
+  /api/apps/{id}/backups:
+    get:
+      summary: 列出应用配置备份
+      parameters: [{ $ref: "#/components/parameters/ApplicationId" }]
+      responses:
+        "200":
+          description: Backups
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [backups]
+                properties:
+                  backups: { type: array, items: { $ref: "#/components/schemas/ApplicationBackup" } }
+  /api/apps/{id}/rollback:
+    post:
+      summary: 从受限备份名回滚并重新校验应用配置
+      parameters: [{ $ref: "#/components/parameters/ApplicationId" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name]
+              properties: { name: { type: string } }
+      responses:
+        "200": { description: Rolled back, content: { application/json: { schema: { $ref: "#/components/schemas/ApplicationApplyResult" } } } }
+        "422": { description: Invalid backup or rollback failure }
   /api/providers/{id}/probe:
     post:
       summary: 探测 Provider、发现模型并可选发送最小测试请求
@@ -146,6 +238,12 @@ paths:
 components:
   securitySchemes:
     bearerAuth: { type: http, scheme: bearer }
+  parameters:
+    ApplicationId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string }
   schemas:
     Protocol:
       type: string
@@ -157,3 +255,86 @@ components:
         yaml: { type: string }
         hash: { type: string }
         config: { type: object }
+    ConfigSaveResult:
+      type: object
+      required: [ok, hash, hot_reloaded, runtime_rebuilt, restart_required]
+      properties:
+        ok: { type: boolean }
+        hash: { type: string }
+        backup: { type: string }
+        hot_reloaded: { type: array, items: { type: string } }
+        runtime_rebuilt: { type: array, items: { type: string } }
+        restart_required: { type: array, items: { type: string } }
+    ApplicationManifest:
+      type: object
+      required: [id, name, description, status, capabilities, config_format]
+      properties:
+        id: { type: string }
+        name: { type: string }
+        description: { type: string }
+        status: { type: string }
+        capabilities:
+          type: array
+          items: { type: string, enum: [detect, configure, preview, verify, rollback] }
+        config_format: { type: string }
+    ApplicationDetection:
+      type: object
+      required: [installed]
+      properties:
+        installed: { type: boolean }
+        executable: { type: string }
+        version: { type: string }
+        message: { type: string }
+    ApplicationState:
+      type: object
+      required: [manifest, detection, path, exists, managed, preserved_fields, synced]
+      properties:
+        manifest: { $ref: "#/components/schemas/ApplicationManifest" }
+        detection: { $ref: "#/components/schemas/ApplicationDetection" }
+        path: { type: string }
+        exists: { type: boolean }
+        managed: { type: object, description: API Key 只返回 api_key_set，不返回值 }
+        preserved_fields: { type: integer, minimum: 0 }
+        synced: { type: boolean }
+    ApplicationPreview:
+      type: object
+      required: [path, content, diff, preserved_fields, will_create_backup]
+      properties:
+        path: { type: string }
+        content: { type: object, description: 敏感字段已遮罩 }
+        diff: { type: string, description: 敏感字段已遮罩 }
+        preserved_fields: { type: integer, minimum: 0 }
+        will_create_backup: { type: boolean }
+    ApplicationApplyResult:
+      type: object
+      required: [ok, path]
+      properties:
+        ok: { type: boolean }
+        path: { type: string }
+        backup: { type: string }
+    ApplicationVerifyStage:
+      type: object
+      required: [id, label, ok, message]
+      properties:
+        id: { type: string }
+        label: { type: string }
+        ok: { type: boolean }
+        message: { type: string }
+        detail: { type: string, description: 已截断并脱敏 }
+        latency_ms: { type: integer, minimum: 0 }
+    ApplicationVerifyResult:
+      type: object
+      required: [ok, verified_at, stages]
+      properties:
+        ok: { type: boolean }
+        verified_at: { type: string, format: date-time }
+        stages: { type: array, items: { $ref: "#/components/schemas/ApplicationVerifyStage" } }
+    ApplicationBackup:
+      type: object
+      required: [name, path, size, modified_at, contains_sensitive_config]
+      properties:
+        name: { type: string }
+        path: { type: string }
+        size: { type: integer, minimum: 0 }
+        modified_at: { type: string, format: date-time }
+        contains_sensitive_config: { type: boolean }

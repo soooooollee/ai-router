@@ -1,37 +1,55 @@
-# 发布验收记录
+# 优化发布验收记录
 
-本文记录仓库当前可复现的发布门禁。它区分“代码与发行物已验证”和“需要真实凭据/时间窗口的发布认证”，避免把未执行的外部验证写成已通过。
+记录日期：2026-07-13
 
-## 已通过
+环境：macOS arm64、Go 1.24.5、Node.js 22.22.2、npm 10.9.7、Chromium、OrbStack Docker 29.4.0、Claude Code 2.1.207
 
-| 范围 | 验证结果 | 复现命令 |
+验收对象：`AI_ROUTER_OPTIMIZATION_ROADMAP.md`
+
+本文件只记录本轮实际执行并可复现的结果。最终命令结果在完成发布门禁后写入下表；GitHub CI 和供应商账户操作单独标记。
+
+## 代码与本机验证
+
+| 范围 | 结果 | 复现命令/证据 |
 | --- | --- | --- |
-| Go 格式、Vet、Race | 全部包通过 | `make release-check` |
-| Web 单元、类型、构建 | Vitest、TypeScript、Vite 通过 | `make web` |
-| Web 核心 E2E | Chromium：鉴权、Provider 探测/最小请求/新增、Route 新增、转换预览、实时 SSE、日志筛选、无效配置拒绝、原子保存/热加载、Diff 与回滚 | `make web-e2e` |
-| 协议矩阵 | 四协议请求、响应、SSE 共 16 个方向；并行 Tools、图片、Document、Refusal、结构化输出、Reasoning、usage、扩展往返 | `go test ./internal/protocol -v` |
-| 网关可靠性 | 16 方向的 429、非法 JSON、超时和流中断；Retry、Fallback、总 Deadline、取消、断流后不切换、严格有损策略 | `go test -race ./internal/gateway -v` |
-| 并发与长稳 | Race 下 30 秒完成 1,968 轮 × 100 并发流，共 196,800 条；无串流、竞态或 Goroutine 泄漏 | `AIROUTE_SOAK_DURATION=30s go test -race ./internal/gateway -run TestLongSoak -count=1 -timeout=2m -v` |
-| 性能与资源 | Native 网关约 0.103 ms/op；空闲 RSS 约 17 MB，低于 5 ms / 50 MB 预算（Apple M3 Pro，本机测量） | `go test ./internal/gateway -run '^$' -bench BenchmarkNativeGateway -benchmem -count=3`、`ps -o rss= -p $PID` |
-| 安全 | Host/Origin/鉴权/限速、SSRF、DNS 重绑定防护、私网默认拒绝、重定向关闭、日志脱敏 | `go test -race ./internal/admin ./internal/secure ./internal/gateway` |
-| 漏洞 | Go 与 npm 均无已知漏洞 | `govulncheck ./...`、`npm audit --audit-level=high` |
-| 许可证 | Go 依赖检查通过；生产 Web 依赖仅 MIT/ISC | 见 CI `go-licenses` 与 `license-checker` 步骤 |
-| 平台构建 | Linux、macOS、Windows 的 amd64/arm64 均完成交叉编译 | `make release-check` |
-| Docker | 镜像构建、非 root 启动、健康/管理 API、挂载目录内原子保存与备份通过 | `docker build .` 与 Compose 流程 |
-| Qwen 3.x / MiMo 实服务 | SiliconFlow Qwen 3.6 与 Xiaomi MiMo 2.5 的文本、SSE、Thinking、Tools、跨协议及 Claude Code 两轮 Bash Tool 工作流通过 | 见 `docs/qwen3-compatibility.md` |
-| 发行元数据 | 版本注入、压缩包、校验和、SBOM、OIDC 签名、GHCR 多架构镜像已配置 | `.goreleaser.yaml`、`.github/workflows/release.yml` |
+| 应用 Adapter | Race 通过；Manifest、未知应用、缺失/损坏配置、保留字段、只读预览、写入/备份/回滚、CLI 超时/取消/截断/脱敏均有直接断言 | `go test -race ./internal/application/... ./internal/admin` |
+| 配置生效与安全 | Race 通过；三类 effect、在线并发/Transport/日志级别、0600、环境变量/明文、路径穿越均通过 | `go test -race ./internal/config ./internal/safefile ./internal/gateway` |
+| Token Count | Race 通过；原生精确值和中文/英文/代码/Tools/媒体估算回退均通过 | `go test -race ./internal/tokencount ./internal/provider ./internal/gateway` |
+| Web 单元/类型/构建 | 2 个 Vitest、TypeScript 和 Vite 生产构建通过 | `make web` |
+| Web 独立 E2E | 5/5 通过（Provider、Route、Application、Settings、Runtime），最终回归耗时 8.9 秒 | `make web-e2e` |
+| 多视口 UI | 1280、1440、1920 与 620 px 无全局横向溢出；四页边界一致 | 本机 Chromium DOM/截图检查 |
+| Go 格式/Vet/Race | 全包通过 | `make release-check`，最终回归 2026-07-13 16:01 CST |
+| 六平台交叉构建 | Linux/macOS/Windows amd64/arm64 全部成功 | `make release-check` |
+| 漏洞 | npm 0 个漏洞；Go 无可达漏洞 | `npm audit --audit-level=high --prefix web`、`govulncheck ./...` |
+| Docker 非 root | 镜像构建成功；UID 100；配置 0600；health、ready、鉴权 admin 均为 200 | `docker build -t airoute:optimization-check .` 及本机容器 Smoke |
+| 本机 Race 长稳 | 60 秒通过，3,955 轮 × 100 并发流，共 395,500 条 | `AIROUTE_SOAK_DURATION=60s go test -race ./internal/gateway -run '^TestLongSoak$' -count=1 -timeout=2m -v` |
 
-## 发布标签前的环境认证
+## 真实链路验证
 
-以下项目依赖真实供应商凭据、外部 Runner 或连续时间窗口，不伪装成本地已执行：
+| 链路 | 结果 | 验收内容 |
+| --- | --- | --- |
+| SiliconFlow Qwen 3.x | 最新二进制通过 | 文本 200；SSE 6 个事件并 `[DONE]`；强制 Tool Calling 1 个合法 JSON 参数；追踪 Header 指向 Qwen 目标 |
+| Xiaomi MiMo | 最新二进制通过 | OpenAI 文本 200；SSE 9 个事件并 `[DONE]`；Tool Calling 1 个合法 JSON 参数；Anthropic 生成 200 |
+| Token Count 实服务 | 回退行为通过 | Xiaomi 原生计数端点未返回可用结果，自动返回 `estimated: true` 与 `unicode-lexical-v1`，生成链路不受影响；原生精确路径由网关 Mock 测试验证 |
+| Claude Code | 最新二进制 L1–L4 全部通过 | 安装约 555 ms、配置同步、真实网关约 889 ms、受控 CLI 约 3.29 秒 |
 
-1. 使用 OpenAI、Anthropic、Gemini 的真实 API Key 各跑一轮文本、流式、图片和 Tool Calling Smoke Test。
-2. 在预发布主机执行 24 小时长稳：
+真实请求只记录 Provider、模型、HTTP 状态、耗时和请求 ID，不记录 Key、完整 Prompt、响应正文或应用配置正文。
 
-   ```bash
-   AIROUTE_SOAK_DURATION=24h go test -race ./internal/gateway -run TestLongSoak -count=1 -timeout=25h -v
-   ```
+## 前端量化结果
 
-3. 发布两个 RC 标签，通过 GitHub 的 Linux/macOS/Windows 原生 Smoke Job 与多架构 Docker Job 后再创建正式标签。
+- `web/src/main.tsx`：12 行。
+- 最大页面组件：474 行，全部低于 500 行。
+- `web/src/styles.css`：424 行；不存在历史 `UI vN` 区块。
+- 路由级构建已拆分；最大单个 JS chunk gzip 约 187 KB。
+- 首屏共享依赖合计 gzip 约 295 KB，主要是 Ant Design、React 与 YAML；在保留 Ant Design Table 的本轮约束下记录为已知依赖成本。
 
-这些是“是否打正式发布标签”的运营门槛，不影响本地源码、二进制、Docker、Web 和自动化测试的完整构建。
+## CI 与发布环境
+
+| 项目 | 状态 | 说明 |
+| --- | --- | --- |
+| GitHub CI Workflow | 代码具备，未在远程 Runner 执行 | 仓库当前无可用远程；不能把本机结果标为 CI 通过 |
+| GitHub Release Workflow | 代码具备，未打正式标签 | 需远程仓库、OIDC 和 GHCR 权限 |
+| 外部 Key 轮换 | 发布阻断 | 对话中暴露的 Xiaomi/SiliconFlow Key 必须由账户所有者撤销并重新签发 |
+| 24 小时预发布长稳 | 发布环境待执行 | 本机 60 秒 Race Soak 已通过；正式标签前仍需预发布主机 24 小时窗口 |
+
+上述“发布环境待执行”不降低源码完成度，但在真实完成前不得创建正式公开版本。

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -71,11 +72,28 @@ logging:
 		t.Fatal(resp.Status)
 	}
 	resp.Body.Close()
+	if err := os.Chmod(path, 0644); err != nil {
+		t.Fatal(err)
+	}
+	resp = request("GET", "/api/config", nil, "")
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("insecure config permissions should block raw read, got %d", resp.StatusCode)
+	}
+	resp.Body.Close()
+	if err := os.Chmod(path, 0600); err != nil {
+		t.Fatal(err)
+	}
 	resp = request("GET", "/api/config", nil, "")
 	configBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
 	if bytes.Contains(configBody, []byte("provider-secret")) {
 		t.Fatal("resolved provider secret leaked from config API")
+	}
+	resp = request("GET", "/api/providers", nil, "")
+	providerBody, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(providerBody, []byte(`"key_storage":"environment"`)) || !bytes.Contains(providerBody, []byte(`"key_reference":"TEST_PROVIDER_KEY"`)) || bytes.Contains(providerBody, []byte("provider-secret")) {
+		t.Fatalf("provider secret metadata is wrong or leaked a value: %s", providerBody)
 	}
 	resp = request("GET", "/api/diagnostics", nil, "")
 	diagnosticBody, _ := io.ReadAll(resp.Body)
@@ -107,9 +125,18 @@ logging:
 	if resp.StatusCode != 200 {
 		t.Fatalf("save failed %d: %s", resp.StatusCode, body)
 	}
+	var saveResult struct {
+		HotReloaded []string `json:"hot_reloaded"`
+	}
+	if err := json.Unmarshal(body, &saveResult); err != nil || !slices.Contains(saveResult.HotReloaded, "logging.level") {
+		t.Fatalf("save response did not explain hot reload semantics: %s (%v)", body, err)
+	}
 	files, _ := filepath.Glob(path + ".bak.*")
 	if len(files) != 1 {
 		t.Fatalf("expected backup, got %v", files)
+	}
+	if info, statErr := os.Stat(files[0]); statErr != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("backup permission is not 0600: %v (%v)", info, statErr)
 	}
 	saved, _ := os.ReadFile(path)
 	if !bytes.Contains(saved, []byte("level: debug")) {
@@ -121,6 +148,12 @@ logging:
 	resp.Body.Close()
 	if resp.StatusCode != 200 {
 		t.Fatalf("rollback failed: %s", rollbackBody)
+	}
+	var rollbackResult struct {
+		HotReloaded []string `json:"hot_reloaded"`
+	}
+	if err = json.Unmarshal(rollbackBody, &rollbackResult); err != nil || !slices.Contains(rollbackResult.HotReloaded, "logging.level") {
+		t.Fatalf("rollback response did not explain hot reload semantics: %s (%v)", rollbackBody, err)
 	}
 	rolledBack, _ := os.ReadFile(path)
 	if !bytes.Contains(rolledBack, []byte("level: info")) {
@@ -195,6 +228,87 @@ func TestClaudeCodeConfigPreservesExistingSettings(t *testing.T) {
 	backups, _ := filepath.Glob(path + ".airoute.bak.*")
 	if len(backups) != 1 {
 		t.Fatalf("expected one backup, got %v", backups)
+	}
+	if info, err := os.Stat(backups[0]); err != nil || info.Mode().Perm() != 0600 {
+		t.Fatalf("application backup permission is not 0600: %v (%v)", info, err)
+	}
+}
+
+func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	t.Setenv("AIROUTE_CLAUDE_SETTINGS_PATH", path)
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"theme":"dark","env":{"EXISTING":"yes","ANTHROPIC_API_KEY":"must-not-leak"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := &config.Config{Admin: config.Admin{Enabled: true, Token: "test-admin-token-1234567890"}}
+	s := New(config.NewStore(c), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "http://127.0.0.1:8080")
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+
+	request := func(method, endpoint, payload string) (*http.Response, []byte) {
+		t.Helper()
+		req, err := http.NewRequest(method, ts.URL+endpoint, strings.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("content-type", "application/json")
+		req.Header.Set("authorization", "Bearer test-admin-token-1234567890")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp, body
+	}
+
+	resp, body := request(http.MethodGet, "/api/apps", "")
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) {
+		t.Fatalf("application list failed (%d): %s", resp.StatusCode, body)
+	}
+	resp, body = request(http.MethodGet, "/api/apps/claude-code", "")
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"api_key_set":true`)) || bytes.Contains(body, []byte("must-not-leak")) {
+		t.Fatalf("application state is invalid or leaked a secret (%d): %s", resp.StatusCode, body)
+	}
+
+	payload := `{"base_url":"http://127.0.0.1:8080","api_key":"local-key","model":"mimo","sonnet_model":"mimo"}`
+	resp, body = request(http.MethodPost, "/api/apps/claude-code/preview", payload)
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"will_create_backup":true`)) || !bytes.Contains(body, []byte(`"theme"`)) || bytes.Contains(body, []byte("local-key")) || bytes.Contains(body, []byte("must-not-leak")) {
+		t.Fatalf("application preview failed (%d): %s", resp.StatusCode, body)
+	}
+	resp, body = request(http.MethodPut, "/api/apps/claude-code/config", payload)
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ok":true`)) {
+		t.Fatalf("application apply failed (%d): %s", resp.StatusCode, body)
+	}
+	var applied struct {
+		Backup string `json:"backup"`
+	}
+	if err := json.Unmarshal(body, &applied); err != nil || applied.Backup == "" {
+		t.Fatalf("application apply did not return a backup: %s", body)
+	}
+	resp, body = request(http.MethodGet, "/api/apps/claude-code/backups", "")
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(applied.Backup)) {
+		t.Fatalf("application backups failed (%d): %s", resp.StatusCode, body)
+	}
+	rollbackPayload, _ := json.Marshal(map[string]string{"name": applied.Backup})
+	resp, body = request(http.MethodPost, "/api/apps/claude-code/rollback", string(rollbackPayload))
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ok":true`)) {
+		t.Fatalf("application rollback failed (%d): %s", resp.StatusCode, body)
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(raw, []byte(`"theme":"dark"`)) || !bytes.Contains(raw, []byte("must-not-leak")) {
+		t.Fatalf("application rollback did not restore the original file: %s (%v)", raw, err)
+	}
+
+	resp, body = request(http.MethodGet, "/api/apps/unknown", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown application should return 404, got %d: %s", resp.StatusCode, body)
 	}
 }
 
