@@ -1,6 +1,6 @@
 # AI Router 优化推进文档
 
-> 文档状态：源码、本机与远程 CI 验收完成；等待预发布 24 小时长稳
+> 文档状态：全部发布前门槛完成；正在发布 v0.1.0
 > 更新时间：2026-07-13  
 > 适用范围：AI Router 核心网关、Web 控制台、应用配置、配置安全与发行工程
 
@@ -590,4 +590,4 @@ npm audit --audit-level=high --prefix web
 
 本机已通过全包 Race、Vet、六平台交叉构建、5/5 Web E2E、npm/Go 漏洞检查、Docker 非 root Smoke、Qwen/MiMo 文本/流式/Tool Calling、Claude Code 真实验证和 60 秒 395,500 条并发流长稳。逐项证据见 [`docs/acceptance.md`](docs/acceptance.md) 和 [`docs/verification.md`](docs/verification.md)。
 
-代码已推送至 `https://github.com/soooooollee/ai-router.git`，主分支 GitHub CI 于 2026-07-13 完整通过（Run `29234871105`），覆盖 Linux 全量门禁、Chromium E2E、macOS/Linux/Windows Smoke 和 Docker Build。Release Workflow 保持未触发，因为正式标签前仍需在预发布主机完成 24 小时 Race 长稳；这是目前唯一剩余的正式公开版本环境门槛。仓库所有者已于 2026-07-13 明确决定不轮换此前用于测试的 Xiaomi/SiliconFlow Key，该风险作为所有者接受项记录，不再作为本轮发布阻断；源码、日志、诊断和 Git 历史仍不得包含这些 Key。
+代码已推送至 `https://github.com/soooooollee/ai-router.git`，主分支 GitHub CI 于 2026-07-13 完整通过（Run `29234871105`），覆盖 Linux 全量门禁、Chromium E2E、macOS/Linux/Windows Smoke 和 Docker Build。仓库所有者随后确认本机 24 小时 Race 长稳已经完成，并接受该结果作为正式发布门槛证据；原始日志未在仓库中留存，因此不额外声明未经记录的吞吐量或起止时间。全部发布前门槛现已满足，下一步创建 `v0.1.0` 标签并验证 Release Workflow。仓库所有者已于 2026-07-13 明确决定不轮换此前用于测试的 Xiaomi/SiliconFlow Key，该风险作为所有者接受项记录，不再作为本轮发布阻断；源码、日志、诊断和 Git 历史仍不得包含这些 Key。
