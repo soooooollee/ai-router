@@ -1,6 +1,7 @@
 package observe
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -50,6 +51,7 @@ type Store struct {
 	next    int
 	full    bool
 	file    string
+	loaded  string
 }
 
 func NewStore(capacity int) *Store {
@@ -75,29 +77,79 @@ func (s *Store) Configure(capacity int, file string) {
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if capacity != s.cap {
+		recent := s.recordsLocked()
+		if len(recent) > capacity {
+			recent = recent[len(recent)-capacity:]
+		}
+		s.resetLocked(capacity, recent)
+	}
 	s.file = file
-	if capacity == s.cap {
+	if file == "" {
+		s.loaded = ""
 		return
 	}
+	if file != s.loaded {
+		s.loadFilesLocked(file)
+		s.loaded = file
+	}
+}
+
+func (s *Store) recordsLocked() []Record {
 	count := s.next
 	if s.full {
 		count = s.cap
 	}
-	keep := min(capacity, count)
-	recent := make([]Record, 0, keep)
-	for i := 0; i < keep; i++ {
-		idx := (s.next - 1 - i + s.cap) % s.cap
-		recent = append(recent, s.records[idx])
+	out := make([]Record, 0, count)
+	start := 0
+	if s.full {
+		start = s.next
 	}
+	for i := 0; i < count; i++ {
+		out = append(out, s.records[(start+i)%s.cap])
+	}
+	return out
+}
+
+func (s *Store) resetLocked(capacity int, records []Record) {
 	s.records = make([]Record, capacity)
 	s.cap, s.next, s.full = capacity, 0, false
-	for i := len(recent) - 1; i >= 0; i-- {
-		s.records[s.next] = recent[i]
+	for _, record := range records {
+		s.records[s.next] = record
 		s.next = (s.next + 1) % s.cap
 		if s.next == 0 {
 			s.full = true
 		}
 	}
+}
+
+func (s *Store) loadFilesLocked(path string) {
+	records := s.recordsLocked()
+	seen := make(map[string]bool, len(records))
+	for _, record := range records {
+		seen[record.ID] = true
+	}
+	for _, candidate := range []string{path + ".3", path + ".2", path + ".1", path} {
+		file, err := os.Open(candidate)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(file)
+		scanner.Buffer(make([]byte, 64<<10), 4<<20)
+		for scanner.Scan() {
+			var record Record
+			if json.Unmarshal(scanner.Bytes(), &record) == nil && record.ID != "" && !seen[record.ID] {
+				records = append(records, record)
+				seen[record.ID] = true
+			}
+		}
+		_ = file.Close()
+	}
+	sort.SliceStable(records, func(i, j int) bool { return records[i].StartedAt.Before(records[j].StartedAt) })
+	if len(records) > s.cap {
+		records = records[len(records)-s.cap:]
+	}
+	s.resetLocked(s.cap, records)
 }
 func (s *Store) writeFile(r Record) {
 	if s.file == "" {

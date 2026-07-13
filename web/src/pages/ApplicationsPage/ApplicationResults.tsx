@@ -1,6 +1,7 @@
 import React from "react";
 import { Check, CircleAlert, RotateCcw } from "lucide-react";
 import type { ApplicationBackup, ApplicationVerifyResult } from "../../types";
+import { currentLocale } from "../../app/i18n";
 
 export function ApplicationResults({
   verifyResult,
@@ -12,7 +13,7 @@ export function ApplicationResults({
 }: {
   verifyResult: ApplicationVerifyResult | null;
   busy: string;
-  verifyCLI: () => void;
+  verifyCLI?: () => void;
   canRollback: boolean;
   backups: ApplicationBackup[];
   rollback: (backup: ApplicationBackup) => void;
@@ -23,9 +24,11 @@ export function ApplicationResults({
         <div className="application-verify-result">
           <div className="application-verify-heading">
             <b>验证结果</b>
-            <button disabled={Boolean(busy)} onClick={verifyCLI}>
-              {busy === "cli" ? "正在执行…" : "运行 Claude Code 完整验证"}
-            </button>
+            {verifyCLI && (
+              <button disabled={Boolean(busy)} onClick={verifyCLI}>
+                {busy === "cli" ? "正在执行…" : "运行 Claude Code 完整验证"}
+              </button>
+            )}
           </div>
           {verifyResult.stages.map((stage) => (
             <div className="application-verify-stage" key={stage.id}>
@@ -55,7 +58,7 @@ export function ApplicationResults({
               <div>
                 <b>{backup.name}</b>
                 <span>
-                  {new Date(backup.modified_at).toLocaleString("zh-CN")}
+                  {new Date(backup.modified_at).toLocaleString(currentLocale())}
                   {backup.contains_sensitive_config ? " · 可能含本地密钥" : ""}
                 </span>
               </div>

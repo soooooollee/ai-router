@@ -135,6 +135,8 @@ type Logging struct {
 	Format         string `yaml:"format" json:"format"`
 	RequestHistory int    `yaml:"request_history" json:"request_history"`
 	CaptureBodies  bool   `yaml:"capture_bodies" json:"capture_bodies"`
+	Persist        bool   `yaml:"persist" json:"persist"`
+	WebRedaction   bool   `yaml:"web_redaction" json:"web_redaction"`
 	File           string `yaml:"file" json:"file,omitempty"`
 }
 type Metrics struct {

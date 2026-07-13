@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/zbss/airoute/internal/application"
+	"github.com/zbss/airoute/internal/application/claudeapp"
 	"github.com/zbss/airoute/internal/application/claudecode"
 	"github.com/zbss/airoute/internal/auth"
 	"github.com/zbss/airoute/internal/config"
@@ -32,7 +33,10 @@ import (
 	"github.com/zbss/airoute/internal/routing"
 	"github.com/zbss/airoute/internal/safefile"
 	"github.com/zbss/airoute/internal/secure"
+	"gopkg.in/yaml.v3"
 )
+
+const webRedactionMask = "••••••••"
 
 //go:embed webdist/*
 var assets embed.FS
@@ -61,7 +65,7 @@ type Server struct {
 
 func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Metrics, version, gatewayURL string) *Server {
 	restrictedTransport := &http.Transport{Proxy: nil, DialContext: secure.PublicDialContext, ResponseHeaderTimeout: 30 * time.Second}
-	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudecode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
+	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
 }
 func (s *Server) CloseIdleConnections() {
 	s.Client.CloseIdleConnections()
@@ -177,7 +181,11 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 			apiError(w, 500, e)
 			return
 		}
-		jsonOut(w, 200, map[string]any{"yaml": string(raw), "hash": current.Hash, "config": current})
+		yamlText := string(raw)
+		if current.Logging.WebRedaction {
+			yamlText = redactConfigYAML(yamlText)
+		}
+		jsonOut(w, 200, map[string]any{"yaml": yamlText, "hash": current.Hash, "config": current})
 	case r.URL.Path == "/api/config/validate" && r.Method == "POST":
 		s.validate(w, r, false)
 	case r.URL.Path == "/api/config" && r.Method == "PUT":
@@ -196,7 +204,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/config/rollback" && r.Method == "POST":
 		s.rollback(w, r)
 	case r.URL.Path == "/api/providers" && r.Method == "GET":
-		jsonOut(w, 200, map[string]any{"providers": publicProviders(s.Config.Get(), s.providerHealth())})
+		current := s.Config.Get()
+		jsonOut(w, 200, map[string]any{"providers": publicProviders(current, s.providerHealth(), current.Logging.WebRedaction)})
 	case r.URL.Path == "/api/providers/detect" && r.Method == "POST":
 		s.detectProvider(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/providers/") && strings.HasSuffix(r.URL.Path, "/probe") && r.Method == "POST":
@@ -215,13 +224,22 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	case r.URL.Path == "/api/logs" && r.Method == "GET":
 		limit := 100
 		fmt.Sscanf(r.URL.Query().Get("limit"), "%d", &limit)
-		jsonOut(w, 200, map[string]any{"logs": s.Logs.List(limit)})
+		logs := s.Logs.List(limit)
+		for i := range logs {
+			logs[i].RequestBody = ""
+			logs[i].ResponseBody = ""
+		}
+		jsonOut(w, 200, map[string]any{"logs": logs})
 	case strings.HasPrefix(r.URL.Path, "/api/logs/") && r.Method == "GET":
 		id := strings.TrimPrefix(r.URL.Path, "/api/logs/")
 		v, ok := s.Logs.Get(id)
 		if !ok {
 			jsonOut(w, 404, map[string]any{"error": "not found"})
 			return
+		}
+		if s.Config.Get().Logging.WebRedaction {
+			v.RequestBody = redactLogBody(v.RequestBody)
+			v.ResponseBody = redactLogBody(v.ResponseBody)
 		}
 		jsonOut(w, 200, v)
 	case r.URL.Path == "/api/metrics/summary" && r.Method == "GET":
@@ -232,6 +250,176 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.playground(w, r)
 	default:
 		jsonOut(w, 404, map[string]any{"error": "not found"})
+	}
+}
+
+func redactLogBody(raw string) string {
+	if raw == "" {
+		return ""
+	}
+	var value any
+	if json.Unmarshal([]byte(raw), &value) != nil {
+		return raw
+	}
+	redactWebValue(value)
+	redacted, err := json.Marshal(value)
+	if err != nil {
+		return raw
+	}
+	return string(redacted)
+}
+
+func sensitiveWebKey(key string) bool {
+	normalized := strings.ReplaceAll(strings.ToLower(key), "-", "_")
+	compact := strings.ReplaceAll(normalized, "_", "")
+	return normalized == "key" || normalized == "token" || strings.HasSuffix(normalized, "_key") || strings.HasSuffix(normalized, "_token") || strings.HasSuffix(compact, "apikey") || strings.HasSuffix(compact, "accesstoken") || strings.Contains(normalized, "secret") || strings.Contains(normalized, "authorization") || strings.Contains(normalized, "cookie") || strings.Contains(normalized, "password")
+}
+
+func collectSensitiveWebValues(value any, parentKey string, values map[string]struct{}) {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			collectSensitiveWebValues(child, key, values)
+		}
+	case []any:
+		for _, child := range item {
+			collectSensitiveWebValues(child, parentKey, values)
+		}
+	case string:
+		if sensitiveWebKey(parentKey) && item != "" && item != webRedactionMask {
+			values[item] = struct{}{}
+		}
+	}
+}
+
+func currentApplicationKey(state application.State) string {
+	for _, key := range []string{"api_key", "ANTHROPIC_API_KEY", "inferenceGatewayApiKey"} {
+		if value, ok := state.Managed[key].(string); ok && value != "" && value != webRedactionMask {
+			return value
+		}
+	}
+	values := map[string]struct{}{}
+	collectSensitiveWebValues(state.Managed, "", values)
+	for value := range values {
+		return value
+	}
+	return ""
+}
+
+func restoreApplicationMaskedKey(ctx context.Context, adapter application.Adapter, raw json.RawMessage) json.RawMessage {
+	var desired map[string]any
+	if json.Unmarshal(raw, &desired) != nil || desired["api_key"] != webRedactionMask {
+		return raw
+	}
+	state, err := adapter.Read(ctx)
+	if err != nil {
+		return raw
+	}
+	if key := currentApplicationKey(state); key != "" {
+		desired["api_key"] = key
+		restored, marshalErr := json.Marshal(desired)
+		if marshalErr == nil {
+			return restored
+		}
+	}
+	return raw
+}
+
+func redactApplicationPreview(ctx context.Context, adapter application.Adapter, preview *application.Preview) {
+	values := map[string]struct{}{}
+	var content any
+	if json.Unmarshal(preview.Content, &content) == nil {
+		collectSensitiveWebValues(content, "", values)
+		redactWebValue(content)
+		if redacted, err := json.Marshal(content); err == nil {
+			preview.Content = redacted
+		}
+	}
+	if state, err := adapter.Read(ctx); err == nil {
+		collectSensitiveWebValues(state.Managed, "", values)
+	}
+	for value := range values {
+		preview.Diff = strings.ReplaceAll(preview.Diff, value, webRedactionMask)
+	}
+}
+
+func redactWebValue(value any) {
+	switch item := value.(type) {
+	case map[string]any:
+		for key, child := range item {
+			if sensitiveWebKey(key) {
+				item[key] = webRedactionMask
+			} else {
+				redactWebValue(child)
+			}
+		}
+	case []any:
+		for _, child := range item {
+			redactWebValue(child)
+		}
+	}
+}
+
+func redactConfigYAML(raw string) string {
+	var document any
+	if yaml.Unmarshal([]byte(raw), &document) != nil {
+		return raw
+	}
+	redactWebValue(document)
+	redacted, err := yaml.Marshal(document)
+	if err != nil {
+		return raw
+	}
+	return string(redacted)
+}
+
+func restoreMaskedConfigYAML(masked, original string) string {
+	var edited, source any
+	if yaml.Unmarshal([]byte(masked), &edited) != nil || yaml.Unmarshal([]byte(original), &source) != nil {
+		return masked
+	}
+	restoreMaskedValue(edited, source)
+	restored, err := yaml.Marshal(edited)
+	if err != nil {
+		return masked
+	}
+	return string(restored)
+}
+
+func restoreMaskedValue(edited, source any) {
+	switch current := edited.(type) {
+	case map[string]any:
+		original, _ := source.(map[string]any)
+		for key, value := range current {
+			originalValue := original[key]
+			text, isText := value.(string)
+			if sensitiveWebKey(key) && isText && text == webRedactionMask {
+				if originalValue != nil {
+					current[key] = originalValue
+				}
+				continue
+			}
+			restoreMaskedValue(value, originalValue)
+		}
+	case []any:
+		original, _ := source.([]any)
+		for index, value := range current {
+			var originalValue any
+			if item, ok := value.(map[string]any); ok {
+				if id, ok := item["id"].(string); ok {
+					for _, candidate := range original {
+						if candidateMap, ok := candidate.(map[string]any); ok && candidateMap["id"] == id {
+							originalValue = candidate
+							break
+						}
+					}
+				}
+			}
+			if originalValue == nil && index < len(original) {
+				originalValue = original[index]
+			}
+			restoreMaskedValue(value, originalValue)
+		}
 	}
 }
 
@@ -269,6 +457,14 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request, save bool) {
 	if save && in.ExpectedHash != "" && in.ExpectedHash != s.Config.Get().Hash {
 		jsonOut(w, 409, map[string]any{"error": "configuration changed since it was loaded"})
 		return
+	}
+	if previousConfig.Logging.WebRedaction && strings.Contains(in.YAML, webRedactionMask) {
+		original, readErr := os.ReadFile(previousConfig.SourcePath)
+		if readErr != nil {
+			apiError(w, 500, readErr)
+			return
+		}
+		in.YAML = restoreMaskedConfigYAML(in.YAML, string(original))
 	}
 	dir := filepath.Dir(s.Config.Get().SourcePath)
 	tmp, e := os.CreateTemp(dir, ".airoute-validate-*.yaml")
@@ -634,6 +830,9 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusUnprocessableEntity, readErr)
 			return
 		}
+		if s.Config.Get().Logging.WebRedaction {
+			redactWebValue(state.Managed)
+		}
 		jsonOut(w, http.StatusOK, state)
 	case action == "preview" && r.Method == http.MethodPost:
 		raw, readErr := io.ReadAll(io.LimitReader(r.Body, 256<<10))
@@ -641,10 +840,14 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusBadRequest, readErr)
 			return
 		}
+		raw = restoreApplicationMaskedKey(r.Context(), adapter, raw)
 		preview, previewErr := adapter.Preview(r.Context(), raw)
 		if previewErr != nil {
 			apiError(w, http.StatusUnprocessableEntity, previewErr)
 			return
+		}
+		if s.Config.Get().Logging.WebRedaction {
+			redactApplicationPreview(r.Context(), adapter, &preview)
 		}
 		jsonOut(w, http.StatusOK, preview)
 	case action == "config" && r.Method == http.MethodPut:
@@ -653,6 +856,7 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusBadRequest, readErr)
 			return
 		}
+		raw = restoreApplicationMaskedKey(r.Context(), adapter, raw)
 		result, applyErr := adapter.Apply(r.Context(), raw)
 		if applyErr != nil {
 			apiError(w, http.StatusUnprocessableEntity, applyErr)
@@ -666,6 +870,7 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusBadRequest, decodeErr)
 			return
 		}
+		options.Config = restoreApplicationMaskedKey(r.Context(), adapter, options.Config)
 		result, verifyErr := adapter.Verify(r.Context(), options)
 		if verifyErr != nil {
 			apiError(w, http.StatusUnprocessableEntity, verifyErr)
@@ -988,16 +1193,14 @@ func summary(m *observe.Metrics, logs *observe.Store) map[string]any {
 	}
 	return map[string]any{"requests": m.Requests.Load(), "errors": m.Errors.Load(), "in_flight": m.InFlight.Load(), "retries": m.Retries.Load(), "fallbacks": m.Fallbacks.Load(), "timeouts": m.Timeouts.Load(), "cancellations": m.Cancellations.Load(), "diagnostics": m.Diagnostics.Load(), "input_tokens": m.InputTokens.Load(), "output_tokens": m.OutputTokens.Load(), "average_latency_ms": avg, "p50_latency_ms": p50, "p95_latency_ms": p95}
 }
-func publicProviders(current *config.Config, health map[string]map[string]any) []any {
-	secretStorage, _ := config.ProviderSecretStorage(current.SourcePath)
+func publicProviders(current *config.Config, health map[string]map[string]any, redact bool) []any {
 	out := make([]any, 0, len(current.Providers))
 	for _, p := range current.Providers {
-		secret := secretStorage[p.ID]
-		mode := secret.Mode
-		if mode == "" {
-			mode, _ = config.SecretStorage(p.APIKey)
+		apiKey := p.APIKey
+		if redact && apiKey != "" {
+			apiKey = webRedactionMask
 		}
-		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "profile": p.Profile, "protocol": p.Protocol, "base_url": p.BaseURL, "models": p.Models, "api_key_set": p.APIKey != "", "key_storage": mode, "key_reference": secret.Reference, "health": health[p.ID]})
+		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "profile": p.Profile, "protocol": p.Protocol, "base_url": p.BaseURL, "models": p.Models, "api_key_set": p.APIKey != "", "api_key": apiKey, "health": health[p.ID]})
 	}
 	return out
 }

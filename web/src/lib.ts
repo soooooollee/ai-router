@@ -1,5 +1,7 @@
+import { currentLocale } from "./app/i18n";
+
 export function compact(n = 0) {
-  return Intl.NumberFormat("zh-CN", {
+  return Intl.NumberFormat(currentLocale(), {
     notation: "compact",
     maximumFractionDigits: 1,
   }).format(n);

@@ -107,7 +107,7 @@ func TestManifestAndMissingOrMalformedConfiguration(t *testing.T) {
 	}
 }
 
-func TestReadRedactsAPIKeyAndVerifyGateway(t *testing.T) {
+func TestReadShowsLocalAPIKeyAndVerifyGateway(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "settings.json")
 	raw := `{"env":{"ANTHROPIC_BASE_URL":"http://router","ANTHROPIC_API_KEY":"secret","ANTHROPIC_MODEL":"mimo"}}`
 	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
@@ -127,8 +127,8 @@ func TestReadRedactsAPIKeyAndVerifyGateway(t *testing.T) {
 		t.Fatal(err)
 	}
 	encoded, _ := json.Marshal(state)
-	if bytes.Contains(encoded, []byte("secret")) || state.Managed["api_key_set"] != true {
-		t.Fatalf("secret leaked or key state missing: %s", encoded)
+	if !bytes.Contains(encoded, []byte("secret")) || state.Managed["ANTHROPIC_API_KEY"] != "secret" {
+		t.Fatalf("local API key is not available to the configuration UI: %s", encoded)
 	}
 	result, err := a.Verify(context.Background(), application.VerifyOptions{})
 	if err != nil {
