@@ -1,6 +1,6 @@
 # 优化路线图验收审计
 
-本文件将 [`AI_ROUTER_OPTIMIZATION_ROADMAP.md`](../AI_ROUTER_OPTIMIZATION_ROADMAP.md) 的完成定义映射到当前源码和可复现验证。证据分为“代码具备”“本机通过”“远程 CI 通过”和“发布环境待执行”，不把未执行的外部流程写成已通过。
+本文件将 [`AI_ROUTER_OPTIMIZATION_ROADMAP.md`](../AI_ROUTER_OPTIMIZATION_ROADMAP.md) 的完成定义映射到当前源码和可复现验证。证据分为“代码具备”“本机通过”“远程 CI 通过”和“正式发行通过”，不把未执行的外部流程写成已通过。
 
 ## 阶段完成矩阵
 
@@ -52,7 +52,8 @@ make release-check
 
 - `.github/workflows/ci.yml` 已配置 Linux 全量门禁、Chromium E2E、三种原生操作系统 Smoke 和 Docker Build。
 - `.github/workflows/release.yml` 已配置六平台制品、Checksum、SBOM、OIDC 签名与 amd64/arm64 镜像。
-- 主分支 GitHub CI 已于 2026-07-13 在远程 Runner 完整通过：[Run 29234871105](https://github.com/soooooollee/ai-router/actions/runs/29234871105)。
+- 合并后的主分支 GitHub CI 已于 2026-07-13 在远程 Runner 完整通过：[Run 29236890142](https://github.com/soooooollee/ai-router/actions/runs/29236890142)。
 - 仓库所有者已确认本机 24 小时 Race 长稳通过并接受其作为发布门槛证据；原始日志未入库，不声明未经记录的吞吐量。
-- 全部发布前门槛已完成，允许创建 `v0.1.0` 标签并触发 Release Workflow。
+- 正式版本 [`v0.1.0`](https://github.com/soooooollee/ai-router/releases/tag/v0.1.0) 与 Release Workflow [Run 29237111173](https://github.com/soooooollee/ai-router/actions/runs/29237111173) 已完成。
+- 六平台归档、六份 SPDX SBOM、checksums、OIDC bundle 和双架构 GHCR 镜像均已生成；下载校验、签名验证和实际二进制版本检查通过。
 - 仓库所有者已于 2026-07-13 明确接受不轮换对话中测试 Key 的风险，因此不再把轮换列为本轮阻断；仓库和发行物仍通过扫描确保不包含真实 Key。
