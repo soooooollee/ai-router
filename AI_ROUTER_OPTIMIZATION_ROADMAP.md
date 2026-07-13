@@ -1,6 +1,6 @@
 # AI Router 优化推进文档
 
-> 文档状态：全部发布前门槛完成；正在发布 v0.1.0
+> 文档状态：全部完成；v0.1.0 已正式发布
 > 更新时间：2026-07-13  
 > 适用范围：AI Router 核心网关、Web 控制台、应用配置、配置安全与发行工程
 
@@ -590,4 +590,6 @@ npm audit --audit-level=high --prefix web
 
 本机已通过全包 Race、Vet、六平台交叉构建、5/5 Web E2E、npm/Go 漏洞检查、Docker 非 root Smoke、Qwen/MiMo 文本/流式/Tool Calling、Claude Code 真实验证和 60 秒 395,500 条并发流长稳。逐项证据见 [`docs/acceptance.md`](docs/acceptance.md) 和 [`docs/verification.md`](docs/verification.md)。
 
-代码已推送至 `https://github.com/soooooollee/ai-router.git`，主分支 GitHub CI 于 2026-07-13 完整通过（Run `29234871105`），覆盖 Linux 全量门禁、Chromium E2E、macOS/Linux/Windows Smoke 和 Docker Build。仓库所有者随后确认本机 24 小时 Race 长稳已经完成，并接受该结果作为正式发布门槛证据；原始日志未在仓库中留存，因此不额外声明未经记录的吞吐量或起止时间。全部发布前门槛现已满足，下一步创建 `v0.1.0` 标签并验证 Release Workflow。仓库所有者已于 2026-07-13 明确决定不轮换此前用于测试的 Xiaomi/SiliconFlow Key，该风险作为所有者接受项记录，不再作为本轮发布阻断；源码、日志、诊断和 Git 历史仍不得包含这些 Key。
+代码已推送至 `https://github.com/soooooollee/ai-router.git`，合并后主分支 GitHub CI 于 2026-07-13 完整通过（Run `29236890142`），覆盖 Linux 全量门禁、Chromium E2E、macOS/Linux/Windows Smoke 和 Docker Build。仓库所有者确认本机 24 小时 Race 长稳已经完成，并接受该结果作为正式发布门槛证据；原始日志未在仓库中留存，因此不额外声明未经记录的吞吐量或起止时间。
+
+正式版本 [`v0.1.0`](https://github.com/soooooollee/ai-router/releases/tag/v0.1.0) 已通过 Release Workflow（Run `29237111173`）发布。发行结果包含六个平台归档、六份 SPDX 2.3 SBOM、checksums、GitHub OIDC 签名 bundle，以及 `linux/amd64`/`linux/arm64` GHCR 镜像；发布后下载校验、bundle 验签和 macOS arm64 二进制版本检查均通过。至此阶段 0–8、发布前门槛和正式发行验证全部完成。仓库所有者已于 2026-07-13 明确决定不轮换此前用于测试的 Xiaomi/SiliconFlow Key，该风险作为所有者接受项记录，不再作为本轮发布阻断；源码、日志、诊断和 Git 历史仍不得包含这些 Key。

@@ -1,4 +1,5 @@
 /bin/
+/dist/
 /claude-code-router/
 /web/node_modules/
 /web/dist/

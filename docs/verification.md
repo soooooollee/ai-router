@@ -6,7 +6,7 @@
 
 验收对象：`AI_ROUTER_OPTIMIZATION_ROADMAP.md`
 
-本文件只记录本轮实际执行并可复现的结果。最终命令结果与远程 CI 证据写入下表；尚未执行的发布环境操作单独标记。
+本文件只记录本轮实际执行并可复现的结果，包括本机门禁、远程 CI、正式发行和发布后独立核验。
 
 ## 代码与本机验证
 
@@ -48,9 +48,18 @@
 
 | 项目 | 状态 | 说明 |
 | --- | --- | --- |
-| GitHub CI Workflow | 远程完整通过 | 主分支 Run [`29234871105`](https://github.com/soooooollee/ai-router/actions/runs/29234871105)，2026-07-13；Test、Playwright、Race、Vet、Build、漏洞/许可证、三平台 Smoke 与 Docker 全部成功 |
-| GitHub Release Workflow | 发布前门槛完成，等待正式标签 | 24 小时 Race 已由仓库所有者确认通过；下一步验证 OIDC、GHCR 与六平台发行制品 |
+| GitHub CI Workflow | 远程完整通过 | 合并后的主分支 Run [`29236890142`](https://github.com/soooooollee/ai-router/actions/runs/29236890142)，2026-07-13；Test、Playwright、Race、Vet、Build、漏洞/许可证、三平台 Smoke 与 Docker 全部成功 |
+| GitHub Release Workflow | 正式发布通过 | `v0.1.0` Run [`29237111173`](https://github.com/soooooollee/ai-router/actions/runs/29237111173)，耗时 12 分 27 秒；GoReleaser、OIDC 签名与双架构镜像全部成功 |
 | 外部 Key 轮换 | 所有者接受风险 | 2026-07-13 明确决定不轮换，不再作为本轮阻断；仓库与发行物继续禁止包含真实 Key |
 | 24 小时预发布长稳 | 已完成 | 仓库所有者确认本机 24 小时 Race 通过，并接受其作为本轮正式发布门槛证据 |
 
-全部发布前验证已经完成；允许创建正式标签，Release Workflow 的制品、签名、SBOM 和镜像结果将在执行后补录。
+## 正式发布后核验
+
+- GitHub Release：[`v0.1.0`](https://github.com/soooooollee/ai-router/releases/tag/v0.1.0)，非 Draft、非 Prerelease。
+- 资产：六个平台归档、六份 SPDX 2.3 SBOM、`checksums.txt` 和 `checksums.txt.bundle`，共 14 个文件。
+- 完整性：下载全部发行资产后，checksums 覆盖的 12 个归档/SBOM 均通过 SHA-256 校验。
+- 签名：Cosign 3.1.1 使用 GitHub Actions OIDC 身份验证 `checksums.txt.bundle` 成功。
+- 二进制：darwin/arm64 制品返回 `airoute 0.1.0 commit=1df68a9a8d96e867c940c18ac95d0e8c91dc646f`。
+- 镜像：Workflow 将 `ghcr.io/soooooollee/ai-router:v0.1.0` 与 `latest` 推送为 `linux/amd64`、`linux/arm64` manifest list，digest 为 `sha256:7201d25db4117f1d216c596743b9d927a5a138aefc61bb8d0c09ba20c42ebff9`。本机 GitHub Token 未授予 `read:packages`，因此该项采用成功的发行日志而非本机私有 Registry 二次拉取作为证据。
+
+源码、发布前门槛与正式发行验证现已全部完成。
