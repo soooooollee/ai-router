@@ -11,10 +11,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/pelletier/go-toml/v2"
 	"github.com/zbss/airoute/internal/application"
 	"github.com/zbss/airoute/internal/safefile"
 )
@@ -31,9 +33,11 @@ type DesiredConfig struct {
 }
 
 type Adapter struct {
-	ConfigPath string
-	HTTPClient *http.Client
-	LookPath   func(string) (string, error)
+	ConfigPath         string
+	HTTPClient         *http.Client
+	LookPath           func(string) (string, error)
+	DesktopExecutables []string
+	desktop            bool
 }
 
 type fileSnapshot struct {
@@ -51,8 +55,18 @@ func New() *Adapter {
 	return &Adapter{HTTPClient: &http.Client{Timeout: 60 * time.Second}, LookPath: exec.LookPath}
 }
 
+func NewDesktop() *Adapter {
+	a := New()
+	a.desktop = true
+	return a
+}
+
 func (a *Adapter) Manifest() application.Manifest {
-	return application.Manifest{ID: "codex", Name: "Codex", Description: "OpenAI 编码助手", Status: "available", Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback}, ConfigFormat: "toml"}
+	id, name, description := "codex", "Codex CLI", "OpenAI 命令行编码助手"
+	if a.desktop {
+		id, name, description = "chatgpt-app", "ChatGPT App", "ChatGPT 桌面端中的 Codex 编码工作区"
+	}
+	return application.Manifest{ID: id, Name: name, Description: description, Status: "available", Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback, application.CapabilityCleanup, application.CapabilityEdit}, ConfigFormat: "toml"}
 }
 
 func (a *Adapter) path() (string, error) {
@@ -73,6 +87,9 @@ func (a *Adapter) path() (string, error) {
 }
 
 func (a *Adapter) executable() (string, error) {
+	if a.desktop {
+		return a.desktopExecutable()
+	}
 	if value := strings.TrimSpace(os.Getenv("AIROUTE_CODEX_EXECUTABLE")); value != "" {
 		return value, nil
 	}
@@ -80,22 +97,106 @@ func (a *Adapter) executable() (string, error) {
 	if lookPath == nil {
 		lookPath = exec.LookPath
 	}
-	return lookPath("codex")
+	path, err := lookPath("codex")
+	if err != nil {
+		return "", err
+	}
+	if isDesktopExecutable(path) {
+		return "", exec.ErrNotFound
+	}
+	return path, nil
+}
+
+func (a *Adapter) desktopExecutable() (string, error) {
+	if value := strings.TrimSpace(os.Getenv("AIROUTE_CHATGPT_CODEX_EXECUTABLE")); value != "" {
+		return value, nil
+	}
+	candidates := a.DesktopExecutables
+	if len(candidates) == 0 {
+		candidates = desktopExecutableCandidates()
+	}
+	for _, candidate := range candidates {
+		info, err := os.Stat(candidate)
+		if err == nil && !info.IsDir() {
+			return candidate, nil
+		}
+	}
+	return "", exec.ErrNotFound
+}
+
+func desktopExecutableCandidates() []string {
+	candidates := []string{}
+	home, _ := os.UserHomeDir()
+	if runtime.GOOS == "darwin" {
+		candidates = append(candidates,
+			"/Applications/ChatGPT.app/Contents/Resources/codex",
+			"/Applications/Codex.app/Contents/Resources/codex",
+		)
+		if home != "" {
+			candidates = append(candidates,
+				filepath.Join(home, "Applications", "ChatGPT.app", "Contents", "Resources", "codex"),
+				filepath.Join(home, "Applications", "Codex.app", "Contents", "Resources", "codex"),
+			)
+		}
+	}
+	if runtime.GOOS == "windows" {
+		if localAppData := strings.TrimSpace(os.Getenv("LOCALAPPDATA")); localAppData != "" {
+			candidates = append(candidates,
+				filepath.Join(localAppData, "Programs", "ChatGPT", "resources", "codex.exe"),
+				filepath.Join(localAppData, "ChatGPT", "resources", "codex.exe"),
+			)
+		}
+	}
+	return candidates
+}
+
+func isDesktopExecutable(path string) bool {
+	paths := []string{path}
+	if resolved, err := filepath.EvalSymlinks(path); err == nil {
+		paths = append(paths, resolved)
+	}
+	for _, candidate := range paths {
+		normalized := strings.ToLower(filepath.ToSlash(candidate))
+		if strings.Contains(normalized, "/chatgpt.app/contents/resources/codex") ||
+			strings.Contains(normalized, "/codex.app/contents/resources/codex") ||
+			strings.Contains(normalized, "/chatgpt/resources/codex.exe") {
+			return true
+		}
+	}
+	return false
 }
 
 func (a *Adapter) Detect(ctx context.Context) (application.Detection, error) {
 	path, err := a.executable()
 	if err != nil {
-		return application.Detection{Installed: false, Message: "未检测到 Codex 命令"}, nil
+		message := "未检测到 Codex CLI 命令"
+		if a.desktop {
+			message = "未检测到 ChatGPT App"
+		}
+		return application.Detection{Installed: false, Message: message}, nil
 	}
 	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	output, commandErr := exec.CommandContext(checkCtx, path, "--version").CombinedOutput()
-	version := strings.TrimSpace(string(output))
 	if commandErr != nil {
-		return application.Detection{Installed: true, Executable: path, Version: version, Message: "已检测到 Codex，但版本读取失败"}, nil
+		message := "检测到 Codex CLI 命令，但无法正常运行"
+		if a.desktop {
+			message = "已检测到 ChatGPT App，但内置 Codex 无法正常运行"
+		}
+		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
+			message = "Codex CLI 命令响应超时"
+			if a.desktop {
+				message = "ChatGPT App 内置 Codex 响应超时"
+			}
+		}
+		return application.Detection{Installed: false, Executable: path, Message: message}, nil
 	}
-	return application.Detection{Installed: true, Executable: path, Version: version, Message: "Codex 已安装"}, nil
+	version := strings.TrimSpace(string(output))
+	message := "Codex CLI 已安装"
+	if a.desktop {
+		message = "ChatGPT App 已安装（包含 Codex）"
+	}
+	return application.Detection{Installed: true, Executable: path, Version: version, Message: message}, nil
 }
 
 func read(path string) ([]byte, error) {
@@ -171,16 +272,16 @@ func managed(raw []byte) map[string]any {
 	return result
 }
 
-func merge(current []byte, desired DesiredConfig, catalogPath string) []byte {
+func stripManaged(current []byte) []byte {
 	lines := strings.Split(string(current), "\n")
-	out := make([]string, 0, len(lines)+10)
+	out := make([]string, 0, len(lines))
 	section := ""
 	skippingAiroute := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			section = trimmed
-			skippingAiroute = section == "[model_providers.airoute]"
+			skippingAiroute = section == "[model_providers.airoute]" || strings.HasPrefix(section, "[model_providers.airoute.")
 			if skippingAiroute {
 				continue
 			}
@@ -194,7 +295,11 @@ func merge(current []byte, desired DesiredConfig, catalogPath string) []byte {
 		}
 		out = append(out, line)
 	}
-	body := strings.TrimSpace(strings.Join(out, "\n"))
+	return []byte(strings.TrimSpace(strings.Join(out, "\n")))
+}
+
+func merge(current []byte, desired DesiredConfig, catalogPath string) []byte {
+	body := string(stripManaged(current))
 	managedBlock := strings.Join([]string{
 		"model = " + tomlString(desired.Model),
 		"model_provider = \"airoute\"",
@@ -452,6 +557,82 @@ func (a *Adapter) Apply(_ context.Context, raw json.RawMessage) (application.App
 	state := managed(next)
 	if state["provider"] != "airoute" || state["model"] == nil {
 		return application.ApplyResult{}, errors.New("写入后的 Codex 配置无效")
+	}
+	_ = safefile.Prune(path, backupMarker, 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: backupName(backup)}, nil
+}
+
+func (a *Adapter) ApplyRaw(_ context.Context, input application.RawConfig) (application.ApplyResult, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	next := []byte(strings.TrimSpace(input.Content) + "\n")
+	var document map[string]any
+	if err = toml.Unmarshal(next, &document); err != nil {
+		return application.ApplyResult{}, fmt.Errorf("Codex 配置不是有效 TOML: %w", err)
+	}
+	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
+	previousCatalog, err := snapshot(catalogPath)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	backup, err := createBundleBackup(path, catalogPath)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	state := managed(next)
+	if state["provider"] == "airoute" && state["model"] != nil && len(input.Config) > 0 {
+		desired, decodeErr := decodeDesired(input.Config)
+		if decodeErr != nil {
+			return application.ApplyResult{}, decodeErr
+		}
+		desired.Model, _ = state["model"].(string)
+		if value, ok := state["base_url"].(string); ok && value != "" {
+			desired.BaseURL = value
+		}
+		if value, ok := state["api_key"].(string); ok && value != "" {
+			desired.APIKey = value
+		}
+		catalog, catalogErr := modelCatalog(desired)
+		if catalogErr != nil {
+			return application.ApplyResult{}, catalogErr
+		}
+		if err = safefile.AtomicWrite(catalogPath, append(catalog, '\n'), 0600); err != nil {
+			return application.ApplyResult{}, err
+		}
+	}
+	if err = safefile.AtomicWrite(path, next, 0600); err != nil {
+		_ = restoreSnapshot(catalogPath, previousCatalog)
+		return application.ApplyResult{}, err
+	}
+	_ = safefile.Prune(path, backupMarker, 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: backupName(backup)}, nil
+}
+
+func (a *Adapter) Cleanup(_ context.Context) (application.ApplyResult, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	current, err := read(path)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
+	backup, err := createBundleBackup(path, catalogPath)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	next := stripManaged(current)
+	if len(bytes.TrimSpace(next)) > 0 {
+		next = append(next, '\n')
+	}
+	if err = safefile.AtomicWrite(path, next, 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	if err = os.Remove(catalogPath); err != nil && !os.IsNotExist(err) {
+		return application.ApplyResult{}, err
 	}
 	_ = safefile.Prune(path, backupMarker, 10)
 	return application.ApplyResult{OK: true, Path: path, Backup: backupName(backup)}, nil

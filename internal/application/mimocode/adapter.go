@@ -42,7 +42,7 @@ func (a *Adapter) Manifest() application.Manifest {
 	return application.Manifest{
 		ID: "mimo-code", Name: "MiMo Code", Description: "小米 MiMo 编码助手",
 		Status: "available", ConfigFormat: "json",
-		Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback},
+		Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback, application.CapabilityCleanup, application.CapabilityEdit},
 	}
 }
 
@@ -307,6 +307,72 @@ func (a *Adapter) Apply(_ context.Context, raw json.RawMessage) (application.App
 	}
 	_ = safefile.Prune(path, backupMarker, 10)
 	return application.ApplyResult{OK: true, Path: path, Backup: filepath.Base(backup)}, nil
+}
+
+func (a *Adapter) ApplyRaw(_ context.Context, input application.RawConfig) (application.ApplyResult, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	var document map[string]any
+	if err = json.Unmarshal([]byte(input.Content), &document); err != nil {
+		return application.ApplyResult{}, fmt.Errorf("MiMo Code 配置不是有效 JSON: %w", err)
+	}
+	if document == nil {
+		return application.ApplyResult{}, errors.New("MiMo Code 配置必须是 JSON 对象")
+	}
+	backup, err := safefile.Backup(path, backupMarker)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	next := []byte(strings.TrimSpace(input.Content) + "\n")
+	if err = safefile.AtomicWrite(path, next, 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	_ = safefile.Prune(path, backupMarker, 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: mimoBackupName(backup)}, nil
+}
+
+func (a *Adapter) Cleanup(_ context.Context) (application.ApplyResult, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	document, _, err := readDocument(path)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	if providers, ok := document["provider"].(map[string]any); ok {
+		delete(providers, "airoute")
+		if len(providers) == 0 {
+			delete(document, "provider")
+		} else {
+			document["provider"] = providers
+		}
+	}
+	if model, _ := document["model"].(string); strings.HasPrefix(model, "airoute/") {
+		delete(document, "model")
+	}
+	next, err := json.MarshalIndent(document, "", "  ")
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	backup, err := safefile.Backup(path, backupMarker)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	if err = safefile.AtomicWrite(path, append(next, '\n'), 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	_ = safefile.Prune(path, backupMarker, 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: mimoBackupName(backup)}, nil
+}
+
+func mimoBackupName(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Base(path)
 }
 
 func (a *Adapter) Verify(ctx context.Context, options application.VerifyOptions) (application.VerifyResult, error) {

@@ -95,3 +95,23 @@ func TestReadAndVerifyChatCompletionsEndpoint(t *testing.T) {
 		t.Fatalf("verify=%#v err=%v", result, err)
 	}
 }
+
+func TestApplyRawAndCleanupPreserveOtherProviders(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "mimocode.json")
+	raw := `{"theme":"dark","model":"airoute/old","provider":{"airoute":{"api":"http://old"},"keep":{"name":"Keep"}}}`
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := New()
+	a.ConfigPath = path
+	if _, err := a.ApplyRaw(context.Background(), application.RawConfig{Content: strings.Replace(raw, `"dark"`, `"light"`, 1)}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	written, _ := os.ReadFile(path)
+	if !bytes.Contains(written, []byte(`"keep"`)) || !bytes.Contains(written, []byte(`"light"`)) || bytes.Contains(written, []byte(`"airoute"`)) {
+		t.Fatalf("unexpected cleaned config: %s", written)
+	}
+}

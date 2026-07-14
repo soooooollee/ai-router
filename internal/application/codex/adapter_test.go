@@ -129,3 +129,71 @@ func TestFirstApplyDoesNotReturnDotAsBackupName(t *testing.T) {
 		t.Fatalf("first apply should not report a backup, got %q", result.Backup)
 	}
 }
+
+func TestDetectRequiresWorkingExecutable(t *testing.T) {
+	a := New()
+	a.LookPath = func(string) (string, error) {
+		return filepath.Join(t.TempDir(), "missing-codex"), nil
+	}
+
+	detection, err := a.Detect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detection.Installed || detection.Executable == "" {
+		t.Fatalf("broken executable must not be reported as installed: %#v", detection)
+	}
+	if detection.Version != "" || strings.Contains(detection.Message, "spawn") {
+		t.Fatalf("process errors must not leak into the version or UI message: %#v", detection)
+	}
+}
+
+func TestDesktopAndCLIHaveDistinctDetection(t *testing.T) {
+	desktop := NewDesktop()
+	desktop.DesktopExecutables = []string{"/bin/echo"}
+	detection, err := desktop.Detect(context.Background())
+	if err != nil || !detection.Installed {
+		t.Fatalf("desktop detection=%#v err=%v", detection, err)
+	}
+	if manifest := desktop.Manifest(); manifest.ID != "chatgpt-app" || manifest.Name != "ChatGPT App" {
+		t.Fatalf("unexpected desktop manifest: %#v", manifest)
+	}
+
+	cli := New()
+	cli.LookPath = func(string) (string, error) {
+		return "/Applications/ChatGPT.app/Contents/Resources/codex", nil
+	}
+	detection, err = cli.Detect(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if detection.Installed || detection.Executable != "" || detection.Message != "未检测到 Codex CLI 命令" {
+		t.Fatalf("desktop bundle must not count as a CLI installation: %#v", detection)
+	}
+}
+
+func TestApplyRawAndCleanupValidateTOMLAndPreserveOtherSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), ".codex", "config.toml")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw := "model = \"old\"\nmodel_provider = \"airoute\"\nsandbox_mode = \"workspace-write\"\n\n[model_providers.airoute]\nbase_url = \"http://old/v1\"\nexperimental_bearer_token = \"secret\"\n\n[mcp_servers.keep]\ncommand = \"keep\"\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := New()
+	a.ConfigPath = path
+	if _, err := a.ApplyRaw(context.Background(), application.RawConfig{Content: raw + "personality = \"friendly\"\n"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.ApplyRaw(context.Background(), application.RawConfig{Content: "broken = ["}); err == nil {
+		t.Fatal("invalid TOML was accepted")
+	}
+	if _, err := a.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	written, _ := os.ReadFile(path)
+	if !bytes.Contains(written, []byte(`sandbox_mode = "workspace-write"`)) || !bytes.Contains(written, []byte(`command = "keep"`)) || bytes.Contains(written, []byte("model_provider")) || bytes.Contains(written, []byte("model_providers.airoute")) {
+		t.Fatalf("unexpected cleaned config:\n%s", written)
+	}
+}

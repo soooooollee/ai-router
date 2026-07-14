@@ -78,3 +78,40 @@ func TestRouteIDRoundTrip(t *testing.T) {
 		}
 	}
 }
+
+func TestApplyRawAndCleanupManagedDesktopConfiguration(t *testing.T) {
+	appPath := filepath.Join(t.TempDir(), "Claude.app")
+	if err := os.MkdirAll(appPath, 0755); err != nil {
+		t.Fatal(err)
+	}
+	dataDir := t.TempDir()
+	a := &Adapter{Candidates: []string{appPath}, DataDir: dataDir}
+	desired := desiredJSON("http://127.0.0.1:12666")
+	preview, err := a.Preview(context.Background(), desired)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var content map[string]any
+	if err = json.Unmarshal(preview.Content, &content); err != nil {
+		t.Fatal(err)
+	}
+	content["customPreviewField"] = true
+	edited, _ := json.MarshalIndent(content, "", "  ")
+	if _, err = a.ApplyRaw(context.Background(), application.RawConfig{Content: string(edited), Config: desired}); err != nil {
+		t.Fatal(err)
+	}
+	_, _, library, _, err := a.paths()
+	if err != nil {
+		t.Fatal(err)
+	}
+	written, _ := os.ReadFile(library)
+	if !strings.Contains(string(written), "customPreviewField") {
+		t.Fatalf("edited preview was not written: %s", written)
+	}
+	if _, err = a.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(library); !os.IsNotExist(err) {
+		t.Fatalf("managed gateway library should be removed: %v", err)
+	}
+}

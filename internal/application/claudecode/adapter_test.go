@@ -89,6 +89,8 @@ func TestManifestAndMissingOrMalformedConfiguration(t *testing.T) {
 		application.CapabilityPreview,
 		application.CapabilityVerify,
 		application.CapabilityRollback,
+		application.CapabilityCleanup,
+		application.CapabilityEdit,
 	}
 	if manifest.ID != "claude-code" || manifest.ConfigFormat != "json" || len(manifest.Capabilities) != len(wantCapabilities) {
 		t.Fatalf("unexpected manifest: %#v", manifest)
@@ -116,6 +118,29 @@ func TestManifestAndMissingOrMalformedConfiguration(t *testing.T) {
 	}
 	if _, err = a.Read(context.Background()); err == nil || !strings.Contains(err.Error(), "有效 JSON") {
 		t.Fatalf("malformed configuration was accepted: %v", err)
+	}
+}
+
+func TestApplyRawAndCleanupPreserveUnmanagedSettings(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	raw := `{"theme":"dark","env":{"EXISTING":"yes","ANTHROPIC_BASE_URL":"http://old","ANTHROPIC_MODEL":"old"}}`
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	a := New()
+	a.SettingsPath = path
+	if _, err := a.ApplyRaw(context.Background(), application.RawConfig{Content: `{"theme":"light","env":{"EXISTING":"yes","ANTHROPIC_MODEL":"edited"}}`}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.ApplyRaw(context.Background(), application.RawConfig{Content: `{"broken":`}); err == nil {
+		t.Fatal("invalid JSON was accepted")
+	}
+	if _, err := a.Cleanup(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	written, _ := os.ReadFile(path)
+	if !bytes.Contains(written, []byte(`"theme": "light"`)) || !bytes.Contains(written, []byte(`"EXISTING": "yes"`)) || bytes.Contains(written, []byte("ANTHROPIC_")) {
+		t.Fatalf("cleanup removed unmanaged settings or kept managed settings: %s", written)
 	}
 }
 

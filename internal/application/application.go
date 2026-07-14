@@ -17,6 +17,8 @@ const (
 	CapabilityPreview   Capability = "preview"
 	CapabilityVerify    Capability = "verify"
 	CapabilityRollback  Capability = "rollback"
+	CapabilityCleanup   Capability = "cleanup"
+	CapabilityEdit      Capability = "edit-preview"
 )
 
 type Manifest struct {
@@ -60,6 +62,11 @@ type ApplyResult struct {
 	Backup string `json:"backup,omitempty"`
 }
 
+type RawConfig struct {
+	Content string          `json:"content"`
+	Config  json.RawMessage `json:"config,omitempty"`
+}
+
 type VerifyOptions struct {
 	Config json.RawMessage `json:"config,omitempty"`
 	RunCLI bool            `json:"run_cli,omitempty"`
@@ -100,6 +107,14 @@ type Adapter interface {
 	Rollback(context.Context, string) (ApplyResult, error)
 }
 
+type RawConfigAdapter interface {
+	ApplyRaw(context.Context, RawConfig) (ApplyResult, error)
+}
+
+type CleanupAdapter interface {
+	Cleanup(context.Context) (ApplyResult, error)
+}
+
 type Registry struct {
 	mu       sync.RWMutex
 	adapters map[string]Adapter
@@ -135,7 +150,7 @@ func (r *Registry) Register(adapter Adapter) error {
 	seenCapabilities := make(map[Capability]struct{}, len(manifest.Capabilities))
 	for _, capability := range manifest.Capabilities {
 		switch capability {
-		case CapabilityDetect, CapabilityConfigure, CapabilityPreview, CapabilityVerify, CapabilityRollback:
+		case CapabilityDetect, CapabilityConfigure, CapabilityPreview, CapabilityVerify, CapabilityRollback, CapabilityCleanup, CapabilityEdit:
 		default:
 			return fmt.Errorf("application adapter %q declares unknown capability %q", manifest.ID, capability)
 		}

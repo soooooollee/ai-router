@@ -4,6 +4,26 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.2.4] - 2026-07-14
+
+### Added
+
+- Add separate Codex CLI and ChatGPT App configuration surfaces while preserving their shared `~/.codex/config.toml` behavior.
+- Add editable application configuration previews with JSON/TOML validation, automatic backups and guarded raw writes.
+- Add application cleanup actions that remove only AI Router-managed settings while preserving unrelated local configuration.
+
+### Changed
+
+- Load the application configuration page without blocking on executable detection and preload route bundles after initial paint.
+- Order application configuration surfaces as Claude Code, Claude App, Codex CLI, ChatGPT App and MiMo Code.
+- Refresh the runtime overview with the original request, success, Token, concurrency and latency content in a compact responsive layout.
+- Limit overview latency samples to requests completed by the current process.
+
+### Fixed
+
+- Detect the Codex CLI independently from the Codex bundled with ChatGPT App and ignore stale executable paths that fail with `ENOENT`.
+- Preserve non-AI Router Claude, Codex and MiMo settings when applying edited previews or cleaning managed configuration.
+
 ## [0.2.3] - 2026-07-14
 
 ### Added
@@ -96,7 +116,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.4
 [0.2.3]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.3
 [0.2.2]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.2
 [0.2.1]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.1

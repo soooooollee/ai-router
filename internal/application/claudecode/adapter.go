@@ -57,7 +57,7 @@ func (a *Adapter) Manifest() application.Manifest {
 		Name:         "Claude Code",
 		Description:  "命令行编码助手",
 		Status:       "available",
-		Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback},
+		Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback, application.CapabilityCleanup, application.CapabilityEdit},
 		ConfigFormat: "json",
 	}
 }
@@ -299,6 +299,70 @@ func (a *Adapter) Apply(ctx context.Context, raw json.RawMessage) (application.A
 	}
 	_ = safefile.Prune(composed.path, ".airoute.bak.", 10)
 	return application.ApplyResult{OK: true, Path: composed.path, Backup: filepath.Base(backup)}, nil
+}
+
+func (a *Adapter) ApplyRaw(_ context.Context, input application.RawConfig) (application.ApplyResult, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	var document map[string]any
+	if err = json.Unmarshal([]byte(input.Content), &document); err != nil {
+		return application.ApplyResult{}, fmt.Errorf("Claude Code 配置不是有效 JSON: %w", err)
+	}
+	if document == nil {
+		return application.ApplyResult{}, errors.New("Claude Code 配置必须是 JSON 对象")
+	}
+	backup, err := backupCurrent(path)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	next := []byte(strings.TrimSpace(input.Content) + "\n")
+	if err = safefile.AtomicWrite(path, next, 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	_ = safefile.Prune(path, ".airoute.bak.", 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: backupBase(backup)}, nil
+}
+
+func (a *Adapter) Cleanup(_ context.Context) (application.ApplyResult, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	settings, _, err := readSettings(path)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	env, _ := settings["env"].(map[string]any)
+	for _, key := range managedEnvKeys {
+		delete(env, key)
+	}
+	if len(env) == 0 {
+		delete(settings, "env")
+	} else {
+		settings["env"] = env
+	}
+	next, err := marshalSettings(settings)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	backup, err := backupCurrent(path)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	if err = safefile.AtomicWrite(path, next, 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	_ = safefile.Prune(path, ".airoute.bak.", 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: backupBase(backup)}, nil
+}
+
+func backupBase(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Base(path)
 }
 
 func desiredFromSettings(settings map[string]any) DesiredConfig {

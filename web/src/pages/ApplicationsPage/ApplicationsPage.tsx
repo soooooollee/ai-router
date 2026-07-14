@@ -1,6 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Tooltip } from "antd";
-import { Check, Save, ShieldCheck } from "lucide-react";
+import { Check, Save, ShieldCheck, Trash2 } from "lucide-react";
 import { api } from "../../app/api";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import {
@@ -19,6 +18,19 @@ import type {
   ApplicationVerifyResult,
   Status,
 } from "../../types";
+
+const applicationOrder = [
+  "claude-code",
+  "claude-app",
+  "codex",
+  "chatgpt-app",
+  "mimo-code",
+];
+
+function previewText(value: ApplicationPreview["content"] | undefined) {
+  if (value === undefined) return "";
+  return typeof value === "string" ? value : JSON.stringify(value, null, 2);
+}
 
 export function ApplicationsPage({
   status,
@@ -47,6 +59,8 @@ export function ApplicationsPage({
   const [previewView, setPreviewView] = useState<"current" | "next">("next");
   const [previewing, setPreviewing] = useState(false);
   const [previewError, setPreviewError] = useState("");
+  const [editedPreview, setEditedPreview] = useState("");
+  const [previewDirty, setPreviewDirty] = useState(false);
   const [verifyResult, setVerifyResult] =
     useState<ApplicationVerifyResult | null>(null);
   const [backups, setBackups] = useState<ApplicationBackup[]>([]);
@@ -64,6 +78,7 @@ export function ApplicationsPage({
     | { kind: "cli" }
     | { kind: "rollback"; backup: ApplicationBackup }
     | { kind: "delete-backup"; backup: ApplicationBackup }
+    | { kind: "cleanup" }
     | null
   >(null);
 
@@ -71,6 +86,7 @@ export function ApplicationsPage({
 	const supportsConfigForm = [
 		"claude-code",
 		"claude-app",
+		"chatgpt-app",
 		"codex",
 		"mimo-code",
 	].includes(selectedID);
@@ -81,8 +97,17 @@ export function ApplicationsPage({
   const canPreview = hasCapability("preview");
 
   const loadApplications = useCallback(async () => {
-    const value = await api("/api/apps");
-    const items = (value.apps || []) as ApplicationListItem[];
+    // The list only needs manifests. CLI detection belongs to the selected app
+    // request and can take seconds for missing or damaged installations.
+    const value = await api("/api/apps?detect=false");
+    const items = ((value.apps || []) as ApplicationListItem[]).sort(
+      (left, right) => {
+        const leftIndex = applicationOrder.indexOf(left.manifest.id);
+        const rightIndex = applicationOrder.indexOf(right.manifest.id);
+        return (leftIndex < 0 ? applicationOrder.length : leftIndex) -
+          (rightIndex < 0 ? applicationOrder.length : rightIndex);
+      },
+    );
     setApps(items);
     setSelectedID((current) =>
       items.some((item) => item.manifest.id === current)
@@ -135,7 +160,11 @@ export function ApplicationsPage({
   }, [loadApplications]);
 
   useEffect(() => {
+    setAppState(null);
+    setBackups([]);
     setPreviewResult(null);
+    setEditedPreview("");
+    setPreviewDirty(false);
     setPreviewView("next");
     setVerifyResult(null);
     loadApplication().catch((error) => setMessage((error as Error).message));
@@ -158,6 +187,8 @@ export function ApplicationsPage({
         })) as ApplicationPreview;
         if (!controller.signal.aborted) {
           setPreviewResult(value);
+          setEditedPreview(previewText(value.content));
+          setPreviewDirty(false);
           setPreviewError("");
         }
       } catch (error) {
@@ -183,6 +214,8 @@ export function ApplicationsPage({
         body: JSON.stringify({ ...form, models: aliases }),
       })) as ApplicationPreview;
       setPreviewResult(nextPreview);
+      setEditedPreview(previewText(nextPreview.content));
+      setPreviewDirty(false);
       const result = await api(`/api/apps/${selectedID}/config`, {
         method: "PUT",
         body: JSON.stringify({ ...form, models: aliases }),
@@ -191,6 +224,51 @@ export function ApplicationsPage({
         result.backup
           ? `已写入 ${result.path}，备份 ${result.backup} 已创建。`
           : `已写入 ${result.path}。`,
+      );
+      await loadApplication();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function saveEditedPreview() {
+    setBusy("raw-save");
+    setMessage("");
+    try {
+      const result = await api(`/api/apps/${selectedID}/raw-config`, {
+        method: "PUT",
+        body: JSON.stringify({
+          content: editedPreview,
+          config: { ...form, models: aliases },
+        }),
+      });
+      setMessage(
+        result.backup
+          ? `已写入手动修改的配置，备份 ${result.backup} 已创建。`
+          : "已写入手动修改的配置。",
+      );
+      setPreviewDirty(false);
+      await loadApplication();
+    } catch (error) {
+      setMessage((error as Error).message);
+    } finally {
+      setBusy("");
+    }
+  }
+
+  async function cleanup() {
+    setBusy("cleanup");
+    setMessage("");
+    try {
+      const result = await api(`/api/apps/${selectedID}/cleanup`, {
+        method: "POST",
+      });
+      setMessage(
+        result.backup
+          ? `已清理旧配置，备份 ${result.backup} 已创建。`
+          : "已清理旧配置。",
       );
       await loadApplication();
     } catch (error) {
@@ -257,7 +335,8 @@ export function ApplicationsPage({
     if (!confirmation) return;
     if (confirmation.kind === "cli") await verify(true);
     else if (confirmation.kind === "rollback") await rollback(confirmation.backup);
-    else await deleteBackup(confirmation.backup);
+    else if (confirmation.kind === "delete-backup") await deleteBackup(confirmation.backup);
+    else await cleanup();
     setConfirmation(null);
   }
 
@@ -310,7 +389,13 @@ export function ApplicationsPage({
                 <div className="application-detail-title">
                   <h3>{selectedApp?.manifest.name || "应用配置"}</h3>
                   <span>
-                    {appState?.detection.installed ? "已安装" : "未检测到"}
+                    {!appState
+                      ? "检测中"
+                      : appState.detection.installed
+                      ? "已安装"
+                      : appState.detection.executable
+                        ? "不可用"
+                        : "未检测到"}
                   </span>
                 </div>
                 <p>
@@ -324,18 +409,13 @@ export function ApplicationsPage({
             </div>
             <div className="application-config-path">
               <span>配置文件</span>
-              <Tooltip
+              <code
                 title={appState?.path}
-                placement="topRight"
-                mouseEnterDelay={0.2}
+                aria-label={appState?.path || undefined}
+                tabIndex={appState?.path ? 0 : undefined}
               >
-                <code
-                  aria-label={appState?.path || undefined}
-                  tabIndex={appState?.path ? 0 : undefined}
-                >
-                  {appState?.path || "正在检测…"}
-                </code>
-              </Tooltip>
+                {appState?.path || "正在检测…"}
+              </code>
               <small>
                 {appState?.synced ? "配置已同步" : "尚未同步"} · 保留现有{" "}
                 {appState?.preserved_fields || 0} 个顶层配置项
@@ -363,8 +443,10 @@ export function ApplicationsPage({
                       <span>
 						{selectedID === "claude-app"
 							? "Claude App 通过本机第三方网关连接 AI Router"
-							: selectedID === "codex"
-								? "Codex 通过 Responses 协议连接 AI Router"
+							: selectedID === "chatgpt-app"
+								? "ChatGPT App 中的 Codex 通过 Responses 协议连接 AI Router"
+								: selectedID === "codex"
+									? "Codex CLI 通过 Responses 协议连接 AI Router"
 								: selectedID === "mimo-code"
 									? "MiMo Code 通过 OpenAI 兼容协议连接 AI Router"
 									: "Claude Code 连接到本机 AI Router"}
@@ -426,14 +508,26 @@ export function ApplicationsPage({
 					<span>
 						{selectedID === "claude-app"
 							? "写入 Claude-3p 独立配置，保存后需重启 Claude App。"
-							: selectedID === "codex"
-								? "仅更新 Codex 的 AI Router provider，保留其他 TOML 设置。"
+							: selectedID === "chatgpt-app"
+								? "与 Codex CLI、IDE 扩展共享 ~/.codex/config.toml；保存后请重启桌面端 Codex。"
+								: selectedID === "codex"
+									? "与 ChatGPT App、IDE 扩展共享 ~/.codex/config.toml；仅更新 AI Router provider。"
 								: selectedID === "mimo-code"
 									? "仅更新 MiMo Code 的 AI Router provider，保留其他 Provider 和设置。"
 									: "写入前自动备份，不覆盖 Hooks、插件和权限配置。"}
 					</span>
                   </div>
                   <div className="application-save-actions">
+                    {hasCapability("cleanup") && (
+                      <button
+                        className="cleanup"
+                        disabled={Boolean(busy)}
+                        onClick={() => setConfirmation({ kind: "cleanup" })}
+                      >
+                        <Trash2 size={15} />
+                        {busy === "cleanup" ? "清理中…" : "清理旧配置"}
+                      </button>
+                    )}
                     {hasCapability("verify") && (
                       <button
                         disabled={!aliases.length || Boolean(busy)}
@@ -457,7 +551,7 @@ export function ApplicationsPage({
                 </div>
                 {message && (
                   <div
-                    className={`application-inline-message ${/已写入|已恢复|验证通过/.test(message) ? "success" : "error"}`}
+                    className={`application-inline-message ${/已写入|已恢复|已清理|验证通过/.test(message) ? "success" : "error"}`}
                   >
                     {message}
                   </div>
@@ -509,21 +603,35 @@ export function ApplicationsPage({
                     </button>
                   </div>
                 </div>
-                <pre>
-                  {previewError
-                    ? `预览生成失败：${previewError}`
-                    : previewResult
-                    ? (() => {
-							const value =
-								previewView === "current"
-									? previewResult.current
-									: previewResult.content;
-							return typeof value === "string"
-								? value
-								: JSON.stringify(value, null, 2);
-						})()
-                    : "正在生成实时预览…"}
-                </pre>
+                {previewView === "next" &&
+                previewResult &&
+                hasCapability("edit-preview") &&
+                !previewError ? (
+                  <textarea
+                    className="application-preview-editor"
+                    aria-label="编辑合并后配置"
+                    value={editedPreview}
+                    readOnly={webRedaction}
+                    onChange={(event) => {
+                      setEditedPreview(event.target.value);
+                      setPreviewDirty(
+                        event.target.value !== previewText(previewResult.content),
+                      );
+                    }}
+                  />
+                ) : (
+                  <pre>
+                    {previewError
+                      ? `预览生成失败：${previewError}`
+                      : previewResult
+                        ? previewText(
+                            previewView === "current"
+                              ? previewResult.current
+                              : previewResult.content,
+                          )
+                        : "正在生成实时预览…"}
+                  </pre>
+                )}
                 {previewResult?.diff && (
                   <details className="application-preview-diff">
                     <summary>查看字段差异</summary>
@@ -531,8 +639,25 @@ export function ApplicationsPage({
                   </details>
                 )}
                 <div className="application-preview-footer">
-                  {webRedaction ? "密钥已脱敏" : "密钥按原文显示"} · 保留 {previewResult?.preserved_fields || 0}{" "}
-                  个顶层字段
+                  <span>
+                    {webRedaction
+                      ? "网页脱敏开启时不可手动写入"
+                      : previewDirty
+                        ? "预览已修改，写入前会校验格式"
+                        : "可直接编辑合并后配置"}
+                    {" · "}保留 {previewResult?.preserved_fields || 0} 个顶层字段
+                  </span>
+                  {hasCapability("edit-preview") && (
+                    <button
+                      disabled={
+                        webRedaction || !previewDirty || Boolean(busy)
+                      }
+                      onClick={saveEditedPreview}
+                    >
+                      <Save size={14} />
+                      {busy === "raw-save" ? "写入中…" : "备份并写入修改"}
+                    </button>
+                  )}
                 </div>
               </div>
             </div>
@@ -544,6 +669,8 @@ export function ApplicationsPage({
         title={
           confirmation?.kind === "cli"
             ? "运行完整验证？"
+            : confirmation?.kind === "cleanup"
+              ? "清理旧配置？"
             : confirmation?.kind === "delete-backup"
               ? "删除配置备份？"
               : "恢复应用配置备份？"
@@ -551,6 +678,14 @@ export function ApplicationsPage({
         description={
           confirmation?.kind === "cli" ? (
             <>Claude Code 将发起一次真实模型请求，可能产生少量 Token 费用。</>
+          ) : confirmation?.kind === "cleanup" ? (
+            <>
+              将删除 <b>{selectedApp?.manifest.name}</b> 中由 AI Router
+              管理或可能产生冲突的旧配置。其他设置会保留，当前内容会先自动备份。
+              {(selectedID === "codex" || selectedID === "chatgpt-app") && (
+                <> ChatGPT App 与 Codex CLI 共享此配置，清理会同时影响两者。</>
+              )}
+            </>
           ) : confirmation?.kind === "delete-backup" ? (
             <>将永久删除备份 <b>{confirmation.backup.name}</b>，此操作无法撤销。</>
           ) : (
@@ -560,11 +695,16 @@ export function ApplicationsPage({
         confirmLabel={
           confirmation?.kind === "cli"
             ? "运行完整验证"
+            : confirmation?.kind === "cleanup"
+              ? "备份并清理"
             : confirmation?.kind === "delete-backup"
               ? "删除备份"
               : "确认恢复"
         }
-        danger={confirmation?.kind === "delete-backup"}
+        danger={
+          confirmation?.kind === "delete-backup" ||
+          confirmation?.kind === "cleanup"
+        }
         busy={Boolean(busy)}
         onCancel={() => setConfirmation(null)}
         onConfirm={confirmAction}

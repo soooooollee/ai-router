@@ -3,7 +3,7 @@ import http from "node:http";
 const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && request.url === "/release") {
     response.setHeader("content-type", "application/json");
-    response.end(JSON.stringify({ tag_name: "v0.2.3" }));
+    response.end(JSON.stringify({ tag_name: "v0.2.4" }));
     return;
   }
   if (request.method === "GET" && request.url.endsWith("/models")) {

@@ -74,7 +74,7 @@ func (a *Adapter) Manifest() application.Manifest {
 	return application.Manifest{
 		ID: "claude-app", Name: "Claude App", Description: "Claude 桌面应用",
 		Status: "available", ConfigFormat: "json",
-		Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback},
+		Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback, application.CapabilityCleanup, application.CapabilityEdit},
 	}
 }
 
@@ -385,6 +385,111 @@ func (a *Adapter) Apply(_ context.Context, raw json.RawMessage) (application.App
 	_ = safefile.AtomicWrite(c.state, append(currentRaw, '\n'), 0600)
 	_ = safefile.Prune(c.state, ".airoute.bak.", 10)
 	return application.ApplyResult{OK: true, Path: c.library, Backup: filepath.Base(backup)}, nil
+}
+
+func (a *Adapter) ApplyRaw(_ context.Context, input application.RawConfig) (application.ApplyResult, error) {
+	c, err := a.compose(input.Config)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	var document map[string]any
+	if err = json.Unmarshal([]byte(input.Content), &document); err != nil {
+		return application.ApplyResult{}, fmt.Errorf("Claude App 网关配置不是有效 JSON: %w", err)
+	}
+	if document == nil {
+		return application.ApplyResult{}, errors.New("Claude App 网关配置必须是 JSON 对象")
+	}
+	libraryRaw := []byte(strings.TrimSpace(input.Content) + "\n")
+	c.next.Library = fileSnapshot{Exists: true, Content: string(libraryRaw)}
+	previousRaw, _ := json.MarshalIndent(c.previous, "", "  ")
+	if err = safefile.AtomicWrite(c.state, append(previousRaw, '\n'), 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	backup, err := safefile.Backup(c.state, ".airoute.bak.")
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	for path, snapshot := range map[string]fileSnapshot{c.root: c.next.Root, c.meta: c.next.Meta, c.library: c.next.Library} {
+		if err = writeSnapshot(path, snapshot); err != nil {
+			return application.ApplyResult{}, err
+		}
+	}
+	currentRaw, _ := json.MarshalIndent(c.next, "", "  ")
+	_ = safefile.AtomicWrite(c.state, append(currentRaw, '\n'), 0600)
+	_ = safefile.Prune(c.state, ".airoute.bak.", 10)
+	return application.ApplyResult{OK: true, Path: c.library, Backup: claudeAppBackupName(backup)}, nil
+}
+
+func (a *Adapter) Cleanup(_ context.Context) (application.ApplyResult, error) {
+	root, meta, library, state, err := a.paths()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	rootObject, _, err := readObject(root)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	metaObject, _, err := readObject(meta)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	if rootObject["deploymentMode"] == "3p" {
+		delete(rootObject, "deploymentMode")
+	}
+	if metaObject["appliedId"] == configID {
+		delete(metaObject, "appliedId")
+	}
+	if entries, ok := metaObject["entries"].([]any); ok {
+		kept := make([]any, 0, len(entries))
+		for _, entry := range entries {
+			if item, ok := entry.(map[string]any); ok && item["id"] == configID {
+				continue
+			}
+			kept = append(kept, entry)
+		}
+		if len(kept) == 0 {
+			delete(metaObject, "entries")
+		} else {
+			metaObject["entries"] = kept
+		}
+	}
+	rootRaw, err := json.MarshalIndent(rootObject, "", "  ")
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	metaRaw, err := json.MarshalIndent(metaObject, "", "  ")
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	current := stateBundle{Version: 1}
+	current.Root, _ = snapshot(root)
+	current.Meta, _ = snapshot(meta)
+	current.Library, _ = snapshot(library)
+	currentRaw, _ := json.MarshalIndent(current, "", "  ")
+	if err = safefile.AtomicWrite(state, append(currentRaw, '\n'), 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	backup, err := safefile.Backup(state, ".airoute.bak.")
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	next := stateBundle{Version: 1, Root: fileSnapshot{Exists: true, Content: string(append(rootRaw, '\n'))}, Meta: fileSnapshot{Exists: true, Content: string(append(metaRaw, '\n'))}}
+	for path, value := range map[string]fileSnapshot{root: next.Root, meta: next.Meta, library: next.Library} {
+		if err = writeSnapshot(path, value); err != nil {
+			return application.ApplyResult{}, err
+		}
+	}
+	nextRaw, _ := json.MarshalIndent(next, "", "  ")
+	_ = safefile.AtomicWrite(state, append(nextRaw, '\n'), 0600)
+	_ = safefile.Prune(state, ".airoute.bak.", 10)
+	return application.ApplyResult{OK: true, Path: library, Backup: claudeAppBackupName(backup)}, nil
+}
+
+func claudeAppBackupName(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Base(path)
 }
 
 func verifyStage(id, label string, ok bool, message, detail string, started time.Time) application.VerifyStage {

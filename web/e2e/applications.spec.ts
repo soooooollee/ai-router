@@ -9,6 +9,13 @@ test("application manifest, preview, apply and gateway verification", async ({
   await expect(
     page.getByRole("heading", { name: "Claude Code" }),
   ).toBeVisible();
+  await expect(page.locator(".horizontal-sheets button")).toHaveText([
+    "Claude Code",
+    "Claude App",
+    "Codex CLI",
+    "ChatGPT App",
+    "MiMo Code",
+  ]);
   await expect(page.getByText("/tmp/airoute-claude-e2e.json")).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新预览" })).toHaveCount(0);
 	await expect(page.getByLabel("默认模型").locator("option")).toHaveText([
@@ -18,11 +25,14 @@ test("application manifest, preview, apply and gateway verification", async ({
 	]);
   await page.getByLabel("AI Router 客户端密钥").fill("e2e-client-key");
   await page.getByLabel("默认模型").selectOption("fast");
-  await expect(page.getByText(/密钥按原文显示/)).toBeVisible();
+  await expect(page.getByText(/可直接编辑合并后配置/)).toBeVisible();
   await expect(
-    page.locator(".application-preview-panel pre").first(),
-  ).toContainText("e2e-client-key");
-  const saveButton = page.getByRole("button", { name: "备份并写入" });
+    page.getByLabel("编辑合并后配置"),
+  ).toHaveValue(/e2e-client-key/);
+  const saveButton = page.getByRole("button", {
+    name: "备份并写入",
+    exact: true,
+  });
   await expect(saveButton).toHaveCSS("font-size", "13px");
   expect((await saveButton.boundingBox())?.width).toBeGreaterThanOrEqual(144);
   await saveButton.click();
@@ -61,18 +71,23 @@ test("application manifest, preview, apply and gateway verification", async ({
     "ANTHROPIC_BASE_URL",
   );
   await mergedTab.click();
-  await expect(page.locator(".application-preview-panel pre").first()).toContainText(
-    "e2e-client-key",
+  await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
+    /e2e-client-key/,
   );
-  const backupCount = await backups.locator(".application-backup-row").count();
+  const editor = page.getByLabel("编辑合并后配置");
+  const editedConfig = JSON.parse(await editor.inputValue());
+  editedConfig.manual_preview_field = true;
+  await editor.fill(JSON.stringify(editedConfig, null, 2));
+  await page.getByRole("button", { name: "备份并写入修改" }).click();
+  await expect(page.getByText(/已写入手动修改的配置/)).toBeVisible();
   const backupName = await backups.locator(".application-backup-row b").first().textContent();
   await backups.getByRole("button", { name: "删除" }).first().click();
   await expect(page.getByRole("heading", { name: "删除配置备份？" })).toBeVisible();
   await page.getByRole("button", { name: "删除备份" }).click();
   await expect(page.getByText(`已删除备份 ${backupName}。`)).toBeVisible();
-  await expect(backups.locator(".application-backup-row")).toHaveCount(
-    backupCount - 1,
-  );
+  await expect(
+    backups.locator(".application-backup-row b", { hasText: backupName ?? "" }),
+  ).toHaveCount(0);
   await page.getByRole("button", { name: "验证连接" }).click();
   await expect(page.getByText("Anthropic 协议链路验证成功")).toBeVisible();
 
@@ -80,15 +95,18 @@ test("application manifest, preview, apply and gateway verification", async ({
   await expect(page.getByRole("heading", { name: "Claude App" })).toBeVisible();
   const configPath = page.getByLabel(/configLibrary\/8f69f2f1/);
   await expect(configPath).toBeVisible();
-  await configPath.hover();
-  await expect(page.getByRole("tooltip")).toContainText("configLibrary/8f69f2f1");
+  await expect(configPath).toHaveAttribute("title", /configLibrary\/8f69f2f1/);
   await expect(page.getByText(/保存后需重启 Claude App/)).toBeVisible();
   await expect(page.getByLabel("AI Router 客户端密钥")).toHaveValue("e2e-client-key");
-  await expect(page.locator(".application-preview-panel pre").first()).toContainText("inferenceGatewayBaseUrl");
+  await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
+    /inferenceGatewayBaseUrl/,
+  );
 
-  await page.getByRole("tab", { name: "Codex" }).click();
-  await expect(page.getByRole("heading", { name: "Codex" })).toBeVisible();
-  await expect(page.getByText("/tmp/airoute-codex-e2e.toml")).toBeVisible();
+  await page.getByRole("tab", { name: "Codex CLI" }).click();
+  await expect(page.getByRole("heading", { name: "Codex CLI" })).toBeVisible();
+  await expect(
+    page.getByLabel("/tmp/airoute-codex-e2e.toml", { exact: true }),
+  ).toBeVisible();
   await expect(page.getByText(/Responses 协议/)).toBeVisible();
   await expect(page.getByLabel("默认模型")).toHaveCount(1);
 	await expect(page.getByLabel("默认模型").locator("option")).toHaveText([
@@ -97,11 +115,20 @@ test("application manifest, preview, apply and gateway verification", async ({
 		"mimo-v2.5 → OpenAI Responses",
 	]);
   await expect(page.getByText("Sonnet 角色")).toHaveCount(0);
-  await expect(page.locator(".application-preview-panel pre").first()).toContainText(
-    'wire_api = "responses"',
+  await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
+    /wire_api = "responses"/,
   );
-  await page.getByRole("button", { name: "备份并写入" }).click();
+  await page
+    .getByRole("button", { name: "备份并写入", exact: true })
+    .click();
   await expect(page.getByText(/已写入 \/tmp\/airoute-codex-e2e\.toml/)).toBeVisible();
+
+  await page.getByRole("tab", { name: "ChatGPT App" }).click();
+  await expect(page.getByRole("heading", { name: "ChatGPT App" })).toBeVisible();
+  await expect(
+    page.getByLabel("/tmp/airoute-codex-e2e.toml", { exact: true }),
+  ).toBeVisible();
+  await expect(page.getByText(/共享 ~\/\.codex\/config\.toml/)).toBeVisible();
 
   await page.getByRole("tab", { name: "MiMo Code" }).click();
   await expect(page.getByRole("heading", { name: "MiMo Code" })).toBeVisible();
@@ -112,12 +139,16 @@ test("application manifest, preview, apply and gateway verification", async ({
 		"fast → 所有兼容协议",
 		"mimo-v2.5 → OpenAI Chat",
 	]);
-  await expect(page.locator(".application-preview-panel pre").first()).toContainText(
-    "@ai-sdk/openai-compatible",
+  await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
+    /@ai-sdk\/openai-compatible/,
   );
-  await expect(page.locator(".application-preview-panel pre").first()).toContainText(
-    '"fast"',
-  );
-  await page.getByRole("button", { name: "备份并写入" }).click();
+  await expect(page.getByLabel("编辑合并后配置")).toHaveValue(/"fast"/);
+  await page
+    .getByRole("button", { name: "备份并写入", exact: true })
+    .click();
   await expect(page.getByText(/已写入 \/tmp\/airoute-mimocode-e2e\.json/)).toBeVisible();
+  await page.getByRole("button", { name: "清理旧配置" }).click();
+  await expect(page.getByRole("heading", { name: "清理旧配置？" })).toBeVisible();
+  await page.getByRole("button", { name: "备份并清理" }).click();
+  await expect(page.getByText(/已清理旧配置/)).toBeVisible();
 });

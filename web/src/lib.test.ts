@@ -56,6 +56,10 @@ describe("presentation helpers", () => {
       { alias: "mimo", protocol: "openai-responses" },
       { alias: "generic" },
     ]);
+    expect(applicationRouteOptions(routes, "chatgpt-app")).toEqual([
+      { alias: "mimo", protocol: "openai-responses" },
+      { alias: "generic" },
+    ]);
     expect(applicationRouteOptions(routes, "claude-code")).toEqual([
       { alias: "mimo", protocol: "anthropic-messages" },
       { alias: "generic" },

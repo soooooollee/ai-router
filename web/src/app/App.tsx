@@ -15,33 +15,42 @@ import { parse, stringify } from "yaml";
 import { api } from "./api";
 import { applyLocale, initialLocale, type Locale } from "./i18n";
 import type { AppConfig, Page, Status, UpdateInfo } from "../types";
+
+const loadApplicationsPage = () =>
+  import("../pages/ApplicationsPage/ApplicationsPage");
+const loadOverviewPage = () => import("../pages/OverviewPage/OverviewPage");
+const loadLogsPage = () => import("../pages/LogsPage/LogsPage");
+const loadProvidersPage = () => import("../pages/ProvidersPage/ProvidersPage");
+const loadRoutesPage = () => import("../pages/RoutesPage/RoutesPage");
+const loadSettingsPage = () => import("../pages/SettingsPage/SettingsPage");
+
 const ApplicationsPage = lazy(() =>
-  import("../pages/ApplicationsPage/ApplicationsPage").then((module) => ({
+  loadApplicationsPage().then((module) => ({
     default: module.ApplicationsPage,
   })),
 );
 const OverviewPage = lazy(() =>
-  import("../pages/OverviewPage/OverviewPage").then((module) => ({
+  loadOverviewPage().then((module) => ({
     default: module.OverviewPage,
   })),
 );
 const LogsPage = lazy(() =>
-  import("../pages/LogsPage/LogsPage").then((module) => ({
+  loadLogsPage().then((module) => ({
     default: module.LogsPage,
   })),
 );
 const ProvidersPage = lazy(() =>
-  import("../pages/ProvidersPage/ProvidersPage").then((module) => ({
+  loadProvidersPage().then((module) => ({
     default: module.ProvidersPage,
   })),
 );
 const RoutesPage = lazy(() =>
-  import("../pages/RoutesPage/RoutesPage").then((module) => ({
+  loadRoutesPage().then((module) => ({
     default: module.RoutesPage,
   })),
 );
 const SettingsPage = lazy(() =>
-  import("../pages/SettingsPage/SettingsPage").then((module) => ({
+  loadSettingsPage().then((module) => ({
     default: module.SettingsPage,
   })),
 );
@@ -117,6 +126,21 @@ export function App() {
     }, 5000);
     return () => clearInterval(id);
   }, [load]);
+  useEffect(() => {
+    // The console is served locally, so warming route chunks after the first
+    // paint makes later sidebar navigation immediate without delaying startup.
+    const id = window.setTimeout(() => {
+      void Promise.allSettled([
+        loadApplicationsPage(),
+        loadOverviewPage(),
+        loadLogsPage(),
+        loadProvidersPage(),
+        loadRoutesPage(),
+        loadSettingsPage(),
+      ]);
+    }, 500);
+    return () => window.clearTimeout(id);
+  }, []);
   useEffect(() => {
     if (!status?.version) return;
     api("/api/update")

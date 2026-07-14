@@ -75,7 +75,7 @@ func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Met
 	if releaseURL == "" {
 		releaseURL = defaultReleaseAPIURL
 	}
-	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, ReleaseURL: releaseURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codex.New(), mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
+	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, ReleaseURL: releaseURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codex.NewDesktop(), codex.New(), mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
 }
 func (s *Server) CloseIdleConnections() {
 	s.Client.CloseIdleConnections()
@@ -835,11 +835,16 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			jsonOut(w, http.StatusMethodNotAllowed, map[string]any{"error": "method not allowed"})
 			return
 		}
+		detect := r.URL.Query().Get("detect") != "false"
 		apps := make([]map[string]any, 0)
 		for _, adapter := range s.Applications.List() {
-			detection, err := adapter.Detect(r.Context())
-			if err != nil {
-				detection.Message = err.Error()
+			detection := application.Detection{}
+			if detect {
+				var err error
+				detection, err = adapter.Detect(r.Context())
+				if err != nil {
+					detection.Message = err.Error()
+				}
 			}
 			apps = append(apps, map[string]any{"manifest": adapter.Manifest(), "detection": detection})
 		}
@@ -899,6 +904,44 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 		result, applyErr := adapter.Apply(r.Context(), raw)
 		if applyErr != nil {
 			apiError(w, http.StatusUnprocessableEntity, applyErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, result)
+	case action == "raw-config" && r.Method == http.MethodPut:
+		rawAdapter, ok := adapter.(application.RawConfigAdapter)
+		if !ok {
+			jsonOut(w, http.StatusNotImplemented, map[string]any{"error": "application does not support editable previews"})
+			return
+		}
+		var input application.RawConfig
+		if decodeErr := json.NewDecoder(io.LimitReader(r.Body, 2<<20)).Decode(&input); decodeErr != nil {
+			apiError(w, http.StatusBadRequest, decodeErr)
+			return
+		}
+		if strings.TrimSpace(input.Content) == "" {
+			jsonOut(w, http.StatusBadRequest, map[string]any{"error": "configuration content is required"})
+			return
+		}
+		if strings.Contains(input.Content, webRedactionMask) {
+			jsonOut(w, http.StatusUnprocessableEntity, map[string]any{"error": "关闭网页脱敏后才能写入手动编辑的配置"})
+			return
+		}
+		input.Config = restoreApplicationMaskedKey(r.Context(), adapter, input.Config)
+		result, applyErr := rawAdapter.ApplyRaw(r.Context(), input)
+		if applyErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, applyErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, result)
+	case action == "cleanup" && r.Method == http.MethodPost:
+		cleanupAdapter, ok := adapter.(application.CleanupAdapter)
+		if !ok {
+			jsonOut(w, http.StatusNotImplemented, map[string]any{"error": "application does not support configuration cleanup"})
+			return
+		}
+		result, cleanupErr := cleanupAdapter.Cleanup(r.Context())
+		if cleanupErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, cleanupErr)
 			return
 		}
 		jsonOut(w, http.StatusOK, result)
@@ -1231,7 +1274,19 @@ func summary(m *observe.Metrics, logs *observe.Store) map[string]any {
 	if completed > 0 {
 		avg = m.LatencyMSTotal.Load() / completed
 	}
-	records := logs.List(500)
+	firstTokenCount := m.FirstTokenBuckets[len(m.FirstTokenBuckets)-1].Load()
+	avgFirstToken := uint64(0)
+	if firstTokenCount > 0 {
+		avgFirstToken = m.FirstTokenMSTotal.Load() / firstTokenCount
+	}
+	records := []observe.Record{}
+	if completed > 0 {
+		sampleLimit := 500
+		if completed < uint64(sampleLimit) {
+			sampleLimit = int(completed)
+		}
+		records = logs.List(sampleLimit)
+	}
 	latencies := make([]int64, 0, len(records))
 	for _, r := range records {
 		latencies = append(latencies, r.DurationMS)
@@ -1243,7 +1298,7 @@ func summary(m *observe.Metrics, logs *observe.Store) map[string]any {
 		p50 = latencies[(len(latencies)-1)*50/100]
 		p95 = latencies[(len(latencies)-1)*95/100]
 	}
-	return map[string]any{"requests": m.Requests.Load(), "errors": m.Errors.Load(), "in_flight": m.InFlight.Load(), "retries": m.Retries.Load(), "fallbacks": m.Fallbacks.Load(), "timeouts": m.Timeouts.Load(), "cancellations": m.Cancellations.Load(), "diagnostics": m.Diagnostics.Load(), "input_tokens": m.InputTokens.Load(), "output_tokens": m.OutputTokens.Load(), "average_latency_ms": avg, "p50_latency_ms": p50, "p95_latency_ms": p95}
+	return map[string]any{"requests": m.Requests.Load(), "errors": m.Errors.Load(), "in_flight": m.InFlight.Load(), "retries": m.Retries.Load(), "fallbacks": m.Fallbacks.Load(), "timeouts": m.Timeouts.Load(), "cancellations": m.Cancellations.Load(), "diagnostics": m.Diagnostics.Load(), "input_tokens": m.InputTokens.Load(), "output_tokens": m.OutputTokens.Load(), "average_latency_ms": avg, "average_first_token_ms": avgFirstToken, "p50_latency_ms": p50, "p95_latency_ms": p95}
 }
 func publicProviders(current *config.Config, health map[string]map[string]any, redact bool) []any {
 	out := make([]any, 0, len(current.Providers))

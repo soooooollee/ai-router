@@ -42,6 +42,8 @@ export type Metrics = {
   timeouts: number;
   cancellations: number;
   diagnostics: number;
+  average_latency_ms?: number;
+  average_first_token_ms?: number;
   p50_latency_ms: number;
   p95_latency_ms: number;
 };
@@ -82,7 +84,13 @@ export type AppConfig = {
   default_route?: { targets: { provider: string; model: string }[] };
 };
 export type ApplicationCapability =
-  "detect" | "configure" | "preview" | "verify" | "rollback";
+  | "detect"
+  | "configure"
+  | "preview"
+  | "verify"
+  | "rollback"
+  | "cleanup"
+  | "edit-preview";
 export type ApplicationManifest = {
   id: string;
   name: string;

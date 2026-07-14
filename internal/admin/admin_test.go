@@ -23,6 +23,27 @@ import (
 	"github.com/zbss/airoute/internal/protocol/openairesponses"
 )
 
+func TestSummaryIncludesCurrentProcessFirstTokenAverage(t *testing.T) {
+	metrics := &observe.Metrics{}
+	metrics.FirstTokenMSTotal.Add(360)
+	metrics.FirstTokenBuckets[len(metrics.FirstTokenBuckets)-1].Add(2)
+	logs := observe.NewStore(2)
+	logs.Add(observe.Record{ID: "previous-process", DurationMS: 900})
+	result := summary(metrics, logs)
+	if result["average_first_token_ms"] != uint64(180) {
+		t.Fatalf("average_first_token_ms = %#v", result["average_first_token_ms"])
+	}
+	if result["p95_latency_ms"] != int64(0) {
+		t.Fatalf("previous-process latency leaked into summary: %#v", result)
+	}
+	logs.Add(observe.Record{ID: "current-process", DurationMS: 120})
+	metrics.Completed.Add(1)
+	result = summary(metrics, logs)
+	if result["p95_latency_ms"] != int64(120) {
+		t.Fatalf("p95_latency_ms = %#v", result["p95_latency_ms"])
+	}
+}
+
 func TestAdminConfigSaveAndSecurity(t *testing.T) {
 	t.Setenv("TEST_ADMIN_TOKEN", "12345678901234567890123456789012")
 	t.Setenv("TEST_PROVIDER_KEY", "provider-secret")
@@ -361,8 +382,8 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 		return resp, body
 	}
 
-	resp, body := request(http.MethodGet, "/api/apps", "")
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) || !bytes.Contains(body, []byte(`"id":"codex"`)) || !bytes.Contains(body, []byte(`"id":"mimo-code"`)) {
+	resp, body := request(http.MethodGet, "/api/apps?detect=false", "")
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) || !bytes.Contains(body, []byte(`"id":"chatgpt-app"`)) || !bytes.Contains(body, []byte(`"id":"codex"`)) || !bytes.Contains(body, []byte(`"id":"mimo-code"`)) {
 		t.Fatalf("application list failed (%d): %s", resp.StatusCode, body)
 	}
 	resp, body = request(http.MethodGet, "/api/apps/claude-code", "")
@@ -412,6 +433,20 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	resp, body = request(http.MethodGet, "/api/apps/claude-code/backups", "")
 	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte(applied.Backup)) {
 		t.Fatalf("deleted application backup still listed (%d): %s", resp.StatusCode, body)
+	}
+
+	rawPayload, _ := json.Marshal(map[string]any{"content": `{"theme":"edited","env":{"EXISTING":"yes","ANTHROPIC_MODEL":"manual"}}`})
+	resp, body = request(http.MethodPut, "/api/apps/claude-code/raw-config", string(rawPayload))
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ok":true`)) {
+		t.Fatalf("editable preview write failed (%d): %s", resp.StatusCode, body)
+	}
+	resp, body = request(http.MethodPost, "/api/apps/claude-code/cleanup", "")
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ok":true`)) {
+		t.Fatalf("application cleanup failed (%d): %s", resp.StatusCode, body)
+	}
+	cleaned, err := os.ReadFile(path)
+	if err != nil || !bytes.Contains(cleaned, []byte(`"theme": "edited"`)) || bytes.Contains(cleaned, []byte("ANTHROPIC_")) {
+		t.Fatalf("application cleanup did not preserve unrelated settings: %s (%v)", cleaned, err)
 	}
 
 	resp, body = request(http.MethodGet, "/api/apps/unknown", "")

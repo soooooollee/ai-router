@@ -27,7 +27,9 @@ export type ApplicationRouteOption = {
 };
 
 export function applicationProtocol(applicationID: string) {
-  if (applicationID === "codex") return "openai-responses";
+  if (applicationID === "codex" || applicationID === "chatgpt-app") {
+    return "openai-responses";
+  }
   if (applicationID === "mimo-code") return "openai-chat";
   if (applicationID === "claude-code" || applicationID === "claude-app") {
     return "anthropic-messages";
