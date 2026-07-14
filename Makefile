@@ -1,4 +1,4 @@
-.PHONY: build test check release-check web web-e2e clean
+.PHONY: build test check lifecycle-test release-check web web-e2e clean
 
 build: web
 	go build -trimpath -ldflags "-s -w" -o bin/air ./cmd/airoute
@@ -11,7 +11,10 @@ check: web
 	go vet ./...
 	go test -race ./...
 
-release-check: check
+lifecycle-test:
+	./scripts/test-lifecycle.sh
+
+release-check: check lifecycle-test
 	GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o /tmp/air-linux-amd64 ./cmd/airoute
 	GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build -trimpath -o /tmp/air-linux-arm64 ./cmd/airoute
 	GOOS=darwin GOARCH=amd64 CGO_ENABLED=0 go build -trimpath -o /tmp/air-darwin-amd64 ./cmd/airoute

@@ -62,7 +62,11 @@ air start
 
 ```text
 air init       创建 airoute.yaml
-air start      启动模型网关和 Web 控制台
+air start      后台启动
+air stop       停止后台实例
+air restart    重启后台实例
+air logs -f    持续查看后台日志
+air serve      前台运行，用于调试
 air status     查看运行状态
 air ui         打开 Web 控制台
 air check      校验 airoute.yaml

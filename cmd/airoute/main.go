@@ -51,8 +51,16 @@ func run(args []string) error {
 		args = args[1:]
 	}
 	switch cmd {
-	case "start", "serve":
+	case "start":
+		return start(args)
+	case "serve":
 		return serve(args)
+	case "stop":
+		return stop(args)
+	case "restart":
+		return restart(args)
+	case "logs":
+		return logs(args)
 	case "init":
 		return initConfig(args)
 	case "check":
@@ -87,7 +95,11 @@ func usage() {
 
 Usage:
   air init     [--config airoute.yaml]
-  air start    [--config airoute.yaml]
+  air start    [--config airoute.yaml] [--foreground]
+  air stop
+  air restart  [--config airoute.yaml]
+  air logs     [--lines 100] [--follow]
+  air serve    [--config airoute.yaml]
   air check    [--config airoute.yaml] [--json]
   air doctor   [--config airoute.yaml] [--json]
   air status   [--url http://127.0.0.1:12667] [--token TOKEN]
@@ -181,8 +193,12 @@ func configFlag(name string, args []string) (*config.Config, *flag.FlagSet, erro
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
 	path := fs.String("config", "airoute.yaml", "configuration file")
+	runtimeStatePath := fs.String("runtime-state", "", "managed runtime state file")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	if *runtimeStatePath != "" {
+		defer removeRuntimeState(*runtimeStatePath, os.Getpid())
 	}
 	c, err := config.Load(*path)
 	if err != nil {
@@ -521,19 +537,31 @@ func probe(args []string) error {
 }
 func status(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
-	u := fs.String("url", "http://127.0.0.1:12667", "admin URL")
+	u := fs.String("url", "", "admin URL")
 	token := fs.String("token", os.Getenv("AIROUTE_ADMIN_TOKEN"), "admin token")
 	jsonMode := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	var managed *runtimeState
+	if statePath, _, pathErr := runtimePaths(); pathErr == nil {
+		if state, stateErr := loadRuntimeState(statePath); stateErr == nil {
+			managed = &state
+			if *u == "" && state.AdminURL != "" {
+				*u = state.AdminURL
+			}
+		}
+	}
+	if *u == "" {
+		*u = "http://127.0.0.1:12667"
+	}
 	req, _ := http.NewRequest(http.MethodGet, strings.TrimRight(*u, "/")+"/api/status", nil)
 	if *token != "" {
 		req.Header.Set("authorization", "Bearer "+*token)
 	}
-	resp, e := http.DefaultClient.Do(req)
+	resp, e := (&http.Client{Timeout: 5 * time.Second}).Do(req)
 	if e != nil {
-		return e
+		return fmt.Errorf("AI Router is not running or the admin endpoint is unavailable: %w", e)
 	}
 	defer resp.Body.Close()
 	raw, e := io.ReadAll(io.LimitReader(resp.Body, 2<<20))
@@ -554,7 +582,11 @@ func status(args []string) error {
 	if json.Unmarshal(raw, &value) != nil {
 		return fmt.Errorf("admin returned invalid JSON")
 	}
-	fmt.Printf("status=%v version=%v uptime_seconds=%v config=%v\n", value["status"], value["version"], value["uptime_seconds"], value["config_version"])
+	pid := 0
+	if managed != nil && processAlive(managed.PID) {
+		pid = managed.PID
+	}
+	fmt.Printf("status=%v pid=%d version=%v uptime_seconds=%v config=%v\n", value["status"], pid, value["version"], value["uptime_seconds"], value["config_version"])
 	return nil
 }
 func ui(args []string) error {

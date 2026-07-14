@@ -62,7 +62,11 @@ Useful commands:
 
 ```text
 air init       Create airoute.yaml
-air start      Start the gateway and Web console
+air start      Start in the background
+air stop       Stop the background instance
+air restart    Restart the background instance
+air logs -f    Follow background logs
+air serve      Run in the foreground for debugging
 air status     Show runtime status
 air ui         Open the Web console
 air check      Validate airoute.yaml

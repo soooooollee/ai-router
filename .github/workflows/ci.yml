@@ -32,6 +32,7 @@ jobs:
       - run: go test -race ./...
       - run: go vet ./...
       - run: go build ./cmd/airoute
+      - run: ./scripts/test-lifecycle.sh
       - uses: golang/govulncheck-action@v1
         with: { go-version-input: "1.25.x", go-package: ./..., cache: false }
       - run: go run github.com/google/go-licenses/v2@v2.0.1 check ./...
@@ -45,7 +46,7 @@ jobs:
         working-directory: npm
       - run: >-
           npx --yes license-checker-rseidelsohn@4.4.2 --production
-          --excludePackages 'airoute-web@0.2.1'
+          --excludePackages 'airoute-web@0.2.2'
           --onlyAllow 'MIT;Apache-2.0;BSD-2-Clause;BSD-3-Clause;ISC;0BSD;BlueOak-1.0.0;CC-BY-4.0;Python-2.0'
           --summary
         working-directory: web

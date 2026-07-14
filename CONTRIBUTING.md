@@ -24,7 +24,7 @@ Create a local configuration and start the development binary:
 
 ```bash
 ./bin/air init
-./bin/air start
+./bin/air serve
 ```
 
 Local configuration and backup files are ignored by Git.

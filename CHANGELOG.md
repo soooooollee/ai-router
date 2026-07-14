@@ -4,10 +4,13 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.2.2] - 2026-07-14
+
 ### Added
 
 - Add contribution, conduct, security, issue, pull request and editor configuration files for the public repository.
 - Attach an installable npm tarball to every GitHub Release so npm installation works before registry publishing is configured.
+- Make `air start` launch a managed background instance and add `air stop`, `air restart`, and `air logs` lifecycle commands; keep `air serve` and `air start --foreground` for terminal-attached debugging.
 
 ### Removed
 
@@ -81,7 +84,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.2
 [0.2.1]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.1
 [0.2.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.0
 [0.1.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.1.0
