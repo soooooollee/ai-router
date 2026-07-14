@@ -18,7 +18,7 @@ ARG COMMIT=none
 ARG BUILT_AT=unknown
 RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} -X main.commit=${COMMIT} -X main.builtAt=${BUILT_AT}" -o /air ./cmd/airoute
 
-FROM alpine:3.22
+FROM alpine:3.24
 RUN apk add --no-cache ca-certificates tzdata && addgroup -S airoute && adduser -S -G airoute airoute
 WORKDIR /data
 COPY --from=build /air /usr/local/bin/air
