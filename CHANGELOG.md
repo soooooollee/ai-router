@@ -6,7 +6,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ### Added
 
-- Add contribution, conduct, security, issue, pull request, dependency update and editor configuration files for the public repository.
+- Add contribution, conduct, security, issue, pull request and editor configuration files for the public repository.
 
 ### Removed
 
