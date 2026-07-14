@@ -37,7 +37,7 @@ npm install --global https://github.com/soooooollee/ai-router/releases/latest/do
 Homebrew on macOS or Linux:
 
 ```bash
-brew install soooooollee/tap/airoute
+brew install soooooollee/ai-router/airoute
 ```
 
 Or build from source with Go 1.24+:
@@ -73,6 +73,8 @@ air check      Validate airoute.yaml
 air doctor     Run configuration diagnostics
 air --help     Show all commands
 ```
+
+To update, rerun the curl or npm install command above, or run `brew update && brew upgrade airoute` for Homebrew. Then run `air restart` if AI Router is already running.
 
 ## License
 

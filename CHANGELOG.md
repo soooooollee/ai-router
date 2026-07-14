@@ -4,6 +4,10 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+### Changed
+
+- Rename the official Homebrew tap to `homebrew-ai-router` and document curl, npm and Homebrew update commands.
+
 ## [0.2.2] - 2026-07-14
 
 ### Added
