@@ -1,0 +1,63 @@
+name: Bug report
+description: Report a reproducible problem in AI Router
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a problem. Remove all API keys, tokens, prompts, responses, and private paths before submitting.
+  - type: input
+    id: version
+    attributes:
+      label: AI Router version
+      placeholder: Output of air version
+    validations:
+      required: true
+  - type: dropdown
+    id: install
+    attributes:
+      label: Installation method
+      options:
+        - Shell installer
+        - npm
+        - Homebrew
+        - GitHub Release
+        - Docker
+        - Source build
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Environment
+      placeholder: macOS 26 arm64, Windows 11 x64, Ubuntu 24.04 amd64, etc.
+    validations:
+      required: true
+  - type: textarea
+    id: description
+    attributes:
+      label: What happened?
+      description: Include the expected result and the actual result.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      description: Provide the smallest reliable reproduction with sanitized configuration.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Sanitized logs
+      render: shell
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety check
+      options:
+        - label: I removed credentials, prompts, responses, and other private data.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

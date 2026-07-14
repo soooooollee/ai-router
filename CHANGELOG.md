@@ -4,6 +4,14 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+### Added
+
+- Add contribution, conduct, security, issue, pull request, dependency update and editor configuration files for the public repository.
+
+### Removed
+
+- Remove completed internal plans, historical acceptance and release evidence, redundant documentation and two unreferenced Web components.
+
 ## [0.2.1] - 2026-07-14
 
 ### Added
@@ -28,7 +36,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Filter application model selectors by each application's client protocol and label options as `alias → protocol`, removing duplicate aliases that cannot be distinguished by the application configuration.
 - Replace manual application preview refreshes with debounced live previews while retaining a final pre-write preview check.
 - Moved the default gateway and Web control-plane listeners from `8080/8081` to `12666/12667` to reduce local port conflicts; explicitly configured listeners remain unchanged.
-- Rewrote the README around installation, Web setup, SDK and application integration, Docker operation, security and port migration.
+- Rewrote the README as a concise bilingual installation and quick-start page.
 - Allowed an empty onboarding configuration so first launch no longer seeds an OpenAI Provider or default route.
 - Made Provider deletion remove its route targets and any routes left without targets, including an obsolete default route.
 - Migrated legacy local application URLs using the old `8080` default to the active gateway shown by the control plane.
