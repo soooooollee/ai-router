@@ -4,7 +4,8 @@ This package installs the platform-specific binary for [AI Router](https://githu
 
 ```bash
 npm install --global airoute-cli
-airoute version
+air init
+air start
 ```
 
 Supported platforms are macOS, Linux, and Windows on x64 or ARM64.

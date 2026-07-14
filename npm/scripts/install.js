@@ -8,6 +8,6 @@ if (process.env.AIROUTE_NPM_SKIP_DOWNLOAD === "1") {
 }
 
 require("../lib/install").install().catch((error) => {
-  process.stderr.write(`airoute: ${error.message}\n`);
+  process.stderr.write(`air: ${error.message}\n`);
   process.exit(1);
 });

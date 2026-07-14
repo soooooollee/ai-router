@@ -54,6 +54,26 @@ logging: {level: info}
 		t.Fatalf("load error not cleared: %s", store.LastError())
 	}
 }
+
+func TestInitConfigCreatesSecureValidConfiguration(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "airoute.yaml")
+	if err := initConfig([]string{"--config", path}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode().Perm() != 0600 {
+		t.Fatalf("mode = %o, want 600", info.Mode().Perm())
+	}
+	if _, err = config.Load(path); err != nil {
+		t.Fatalf("generated configuration is invalid: %v", err)
+	}
+	if err = initConfig([]string{"--config", path}); err == nil {
+		t.Fatal("expected existing configuration to be preserved")
+	}
+}
 func waitFor(t *testing.T, ok func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)

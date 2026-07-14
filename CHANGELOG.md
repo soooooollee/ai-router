@@ -10,6 +10,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 - Add complete Codex and MiMo Code application adapters with installation detection, live previews, atomic configuration writes, gateway verification, backup deletion and rollback.
 - Add verified shell, npm and Homebrew installation paths with release automation and checksum validation.
+- Rename the installed CLI to `air`, add `air init` and `air start`, and retain `serve` as a compatibility alias.
 
 ### Changed
 

@@ -40,7 +40,7 @@ var builtAt = "unknown"
 
 func main() {
 	if err := run(os.Args[1:]); err != nil {
-		fmt.Fprintln(os.Stderr, "airoute:", err)
+		fmt.Fprintln(os.Stderr, "air:", err)
 		os.Exit(1)
 	}
 }
@@ -51,8 +51,10 @@ func run(args []string) error {
 		args = args[1:]
 	}
 	switch cmd {
-	case "serve":
+	case "start", "serve":
 		return serve(args)
+	case "init":
+		return initConfig(args)
 	case "check":
 		return check(args)
 	case "convert":
@@ -70,7 +72,7 @@ func run(args []string) error {
 	case "ui":
 		return ui(args)
 	case "version", "--version", "-v":
-		fmt.Printf("airoute %s commit=%s built=%s go=%s\n", version, commit, builtAt, runtime.Version())
+		fmt.Printf("air %s commit=%s built=%s go=%s\n", version, commit, builtAt, runtime.Version())
 		return nil
 	case "help", "--help", "-h":
 		usage()
@@ -84,17 +86,82 @@ func usage() {
 	fmt.Print(`AI Router — compact AI protocol conversion gateway
 
 Usage:
-  airoute serve   --config airoute.yaml
-  airoute check   --config airoute.yaml [--json]
-  airoute convert --from openai-chat --to anthropic-messages [file]
-  airoute doctor  --config airoute.yaml [--json]
-  airoute models  --config airoute.yaml [--json]
-  airoute routes  --config airoute.yaml [--json]
-  airoute probe   --config airoute.yaml --provider ID [--json]
-  airoute status  [--url http://127.0.0.1:12667] [--token TOKEN]
-  airoute ui      [--url http://127.0.0.1:12667]
-  airoute version
+  air init     [--config airoute.yaml]
+  air start    [--config airoute.yaml]
+  air check    [--config airoute.yaml] [--json]
+  air doctor   [--config airoute.yaml] [--json]
+  air status   [--url http://127.0.0.1:12667] [--token TOKEN]
+  air ui       [--url http://127.0.0.1:12667]
+  air models   [--config airoute.yaml] [--json]
+  air routes   [--config airoute.yaml] [--json]
+  air probe    [--config airoute.yaml] --provider ID [--json]
+  air convert  --from openai-chat --to anthropic-messages [file]
+  air version
 `)
+}
+
+const minimalConfig = `version: 1
+
+server:
+  listen: 127.0.0.1:12666
+  admin_listen: 127.0.0.1:12667
+  max_concurrent: 256
+  max_headers: 100
+  max_header_bytes: 1048576
+
+admin:
+  enabled: true
+
+auth:
+  enabled: false
+
+providers: []
+routes: []
+
+conversion:
+  unsupported_fields: warn
+
+logging:
+  level: info
+  request_history: 50
+
+metrics:
+  enabled: true
+  path: /metrics
+`
+
+func initConfig(args []string) error {
+	fs := flag.NewFlagSet("init", flag.ContinueOnError)
+	path := fs.String("config", "airoute.yaml", "configuration file")
+	force := fs.Bool("force", false, "replace an existing configuration file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
+	if *force {
+		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
+	}
+	file, err := os.OpenFile(*path, flags, 0600)
+	if err != nil {
+		if errors.Is(err, os.ErrExist) {
+			return fmt.Errorf("configuration already exists: %s (use --force to replace it)", *path)
+		}
+		return fmt.Errorf("create configuration: %w", err)
+	}
+	if _, err = io.WriteString(file, minimalConfig); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("write configuration: %w", err)
+	}
+	if err = file.Sync(); err != nil {
+		_ = file.Close()
+		return fmt.Errorf("sync configuration: %w", err)
+	}
+	if err = file.Close(); err != nil {
+		return fmt.Errorf("close configuration: %w", err)
+	}
+	fmt.Printf("Created %s\n", *path)
+	fmt.Println("Run 'air start' and open http://127.0.0.1:12667")
+	return nil
 }
 func registry() *protocol.Registry {
 	return protocol.NewRegistry(openaichat.New(), openairesponses.New(), anthropic.New(), gemini.New())
