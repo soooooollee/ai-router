@@ -10,6 +10,8 @@ const zhToEn: Record<string, string> = {
   "应用配置": "Applications",
   "调用日志": "Request Logs",
   "系统设置": "Settings",
+  "当前版本": "Current version",
+  "可更新到": "Update available:",
   "本地 AI 协议网关": "Local AI Protocol Gateway",
   "运行中": "Running",
   "已关闭": "Stopped",

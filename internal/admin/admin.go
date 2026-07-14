@@ -44,21 +44,25 @@ const webRedactionMask = "••••••••"
 var assets embed.FS
 
 type Server struct {
-	Config           *config.Store
-	Registry         *protocol.Registry
-	Logs             *observe.Store
-	Metrics          *observe.Metrics
-	Started          time.Time
-	Version          string
-	GatewayURL       string
-	Client           *http.Client
-	RestrictedClient *http.Client
-	Applications     *application.Registry
-	failureMu        sync.Mutex
-	failures         map[string][]time.Time
-	healthMu         sync.RWMutex
-	health           map[string]map[string]any
-	GatewayControl   interface {
+	Config            *config.Store
+	Registry          *protocol.Registry
+	Logs              *observe.Store
+	Metrics           *observe.Metrics
+	Started           time.Time
+	Version           string
+	GatewayURL        string
+	ReleaseURL        string
+	Client            *http.Client
+	RestrictedClient  *http.Client
+	Applications      *application.Registry
+	failureMu         sync.Mutex
+	failures          map[string][]time.Time
+	healthMu          sync.RWMutex
+	health            map[string]map[string]any
+	updateMu          sync.Mutex
+	updateCached      UpdateInfo
+	updateCachedUntil time.Time
+	GatewayControl    interface {
 		SetEnabled(bool)
 		IsEnabled() bool
 		ApplyRuntimeConfig(*config.Config, *config.Config)
@@ -67,7 +71,11 @@ type Server struct {
 
 func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Metrics, version, gatewayURL string) *Server {
 	restrictedTransport := &http.Transport{Proxy: nil, DialContext: secure.PublicDialContext, ResponseHeaderTimeout: 30 * time.Second}
-	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codex.New(), mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
+	releaseURL := os.Getenv("AIROUTE_RELEASE_API_URL")
+	if releaseURL == "" {
+		releaseURL = defaultReleaseAPIURL
+	}
+	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, ReleaseURL: releaseURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codex.New(), mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
 }
 func (s *Server) CloseIdleConnections() {
 	s.Client.CloseIdleConnections()
@@ -153,6 +161,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 			status = "stopped"
 		}
 		jsonOut(w, 200, map[string]any{"status": status, "runtime_state_persistent": false, "version": s.Version, "uptime_seconds": int(time.Since(s.Started).Seconds()), "config_version": c.Hash, "config_error": s.Config.LastError(), "gateway_url": s.GatewayURL, "providers": len(c.Providers), "routes": len(c.Routes), "provider_health": s.providerHealth(), "metrics": summary(s.Metrics, s.Logs)})
+	case r.URL.Path == "/api/update" && r.Method == "GET":
+		jsonOut(w, 200, s.checkUpdate(r.Context()))
 	case r.URL.Path == "/api/runtime" && r.Method == "PUT":
 		if s.GatewayControl == nil {
 			jsonOut(w, 501, map[string]any{"error": "gateway runtime control is unavailable"})

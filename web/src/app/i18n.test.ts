@@ -19,4 +19,9 @@ describe("application detection localization", () => {
       translateValue("已检测到命令，但版本读取失败", "en-US"),
     ).toBe("Command detected, but version lookup failed");
   });
+
+  it("translates the sidebar version status", () => {
+    expect(translateValue("当前版本", "en-US")).toBe("Current version");
+    expect(translateValue("可更新到", "en-US")).toBe("Update available:");
+  });
 });

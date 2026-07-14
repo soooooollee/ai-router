@@ -1,5 +1,6 @@
 import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
 import {
+  ArrowUpRight,
   Braces,
   ChartNoAxesCombined,
   ChevronRight,
@@ -13,7 +14,7 @@ import {
 import { parse, stringify } from "yaml";
 import { api } from "./api";
 import { applyLocale, initialLocale, type Locale } from "./i18n";
-import type { AppConfig, Page, Status } from "../types";
+import type { AppConfig, Page, Status, UpdateInfo } from "../types";
 const ApplicationsPage = lazy(() =>
   import("../pages/ApplicationsPage/ApplicationsPage").then((module) => ({
     default: module.ApplicationsPage,
@@ -62,6 +63,7 @@ export function App() {
     : "overview";
   const [page, setPage] = useState<Page>(initialPage);
   const [status, setStatus] = useState<Status | null>(null);
+  const [updateInfo, setUpdateInfo] = useState<UpdateInfo | null>(null);
   const [config, setConfig] = useState<AppConfig | null>(null);
   const [yaml, setYaml] = useState("");
   const [hash, setHash] = useState("");
@@ -115,6 +117,12 @@ export function App() {
     }, 5000);
     return () => clearInterval(id);
   }, [load]);
+  useEffect(() => {
+    if (!status?.version) return;
+    api("/api/update")
+      .then(setUpdateInfo)
+      .catch(() => setUpdateInfo(null));
+  }, [status?.version]);
   useEffect(() => {
     const syncHash = () => {
       const requested =
@@ -177,6 +185,7 @@ export function App() {
             </button>
           ))}
         </nav>
+        <VersionBadge version={status?.version} update={updateInfo} />
         </aside>
         <main>
         {error && (
@@ -239,6 +248,43 @@ export function App() {
         </main>
       </div>
     </div>
+  );
+}
+
+function VersionBadge({
+  version,
+  update,
+}: {
+  version?: string;
+  update: UpdateInfo | null;
+}) {
+  const displayVersion = (value?: string) => {
+    if (!value) return "—";
+    return value === "dev" || value.startsWith("v") ? value : `v${value}`;
+  };
+  const hasUpdate = Boolean(update?.update_available && update.latest_version);
+  const releaseURL = update?.release_url || "https://github.com/soooooollee/ai-router/releases";
+  return (
+    <a
+      className={`sidebar-version${hasUpdate ? " has-update" : ""}`}
+      data-testid="sidebar-version"
+      href={releaseURL}
+      target="_blank"
+      rel="noreferrer"
+    >
+      <span className="sidebar-version-label">
+        <span>当前版本</span>
+        <ArrowUpRight size={13} />
+      </span>
+      <strong>{displayVersion(version)}</strong>
+      {hasUpdate && (
+        <small>
+          <i />
+          <span>可更新到</span>
+          {displayVersion(update?.latest_version)}
+        </small>
+      )}
+    </a>
   );
 }
 

@@ -22,6 +22,15 @@ export type Status = {
   >;
   metrics: Metrics;
 };
+export type UpdateInfo = {
+  checked: boolean;
+  current_version: string;
+  latest_version?: string;
+  update_available: boolean;
+  release_url: string;
+  checked_at: string;
+  check_unavailable?: boolean;
+};
 export type Metrics = {
   requests: number;
   errors: number;

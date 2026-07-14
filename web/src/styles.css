@@ -136,6 +136,17 @@ header h1{color:#17191e;letter-spacing:-.04em;margin:7px 0 0;font-size:27px;font
 .side-status.is-stopped .dot{background:#f06472;box-shadow:0 0 10px #f0647266}
 .side-status.is-stopped>svg{color:#f06472}
 .side-status>svg{color:#7f8998}
+.sidebar-version{color:#8d96a5;text-decoration:none;background:#171b22;border:1px solid #2b313b;border-radius:11px;flex-direction:column;gap:7px;margin-top:auto;padding:12px 13px;display:flex;transition:border-color .16s,background .16s,transform .16s}
+.sidebar-version:hover{color:#aeb6c3;background:#1c212a;border-color:#475264;transform:translateY(-1px)}
+.sidebar-version-label{justify-content:space-between;align-items:center;gap:8px;font-size:9px;display:flex}
+.sidebar-version-label>svg{color:#626c7b;flex:none}
+.sidebar-version strong{color:#eef1f5;letter-spacing:.01em;font:700 13px/1.2 ui-monospace,SFMono-Regular,Menlo,monospace}
+.sidebar-version small{color:#9ba8ba;align-items:center;gap:5px;font-size:9px;line-height:1.35;display:flex}
+.sidebar-version small i{background:#4d8dff;border-radius:50%;flex:none;width:6px;height:6px;box-shadow:0 0 0 4px #4d8dff1f}
+.sidebar-version.has-update{background:linear-gradient(145deg,#17243a,#171b22);border-color:#315d9c}
+.sidebar-version.has-update strong{color:#fff}
+@media (width<=900px){.sidebar-version{align-items:center;padding:10px 6px}.sidebar-version-label,.sidebar-version small{display:none}.sidebar-version strong{font-size:9px}}
+@media (width<=820px){.sidebar-version{flex-direction:row;justify-content:space-between;align-items:center;gap:12px;margin-top:8px;padding:9px 12px}.sidebar-version-label,.sidebar-version small{display:flex}.sidebar-version-label{font-size:8px}.sidebar-version strong{margin-right:auto;font-size:10px}.sidebar-version small{font-size:8px}}
 .workflow-steps{grid-template-columns:auto 1fr auto 1fr auto;align-items:center;max-width:760px;margin:0 0 30px;padding:0;display:grid}
 .workflow-steps>div{color:#a1a6af;align-items:center;gap:9px;min-width:0;display:flex}
 .workflow-steps>div>span{color:#858b96;background:#fff;border:1px solid #d9dde3;border-radius:50%;flex:0 0 30px;place-items:center;width:30px;height:30px;font:600 10px ui-monospace,monospace;display:grid}

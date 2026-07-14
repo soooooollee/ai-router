@@ -4,9 +4,17 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.2.3] - 2026-07-14
+
+### Added
+
+- Show the running version below the navigation and highlight a newer GitHub Release when one is available.
+
 ### Changed
 
 - Rename the official Homebrew tap to `homebrew-ai-router` and document curl, npm and Homebrew update commands.
+- Run Docker containers in foreground `serve` mode now that `air start` manages a detached local process.
+- Rewrite public Git history to remove internal planning documents and replace legacy personal commit metadata with the GitHub noreply identity.
 
 ## [0.2.2] - 2026-07-14
 
@@ -88,7 +96,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.3
 [0.2.2]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.2
 [0.2.1]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.1
 [0.2.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.0

@@ -8,6 +8,7 @@
 /web/playwright-report/
 /web/*.tsbuildinfo
 *.log
+airoute-requests.jsonl*
 *.tmp
 .DS_Store
 .env

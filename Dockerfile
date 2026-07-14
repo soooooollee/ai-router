@@ -25,4 +25,4 @@ COPY --from=build /air /usr/local/bin/air
 USER airoute
 EXPOSE 12666 12667
 ENTRYPOINT ["air"]
-CMD ["start", "--config", "/data/airoute.yaml"]
+CMD ["serve", "--config", "/data/airoute.yaml"]
