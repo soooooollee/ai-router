@@ -12,7 +12,7 @@ say() {
 }
 
 fail() {
-  printf 'airoute: %s\n' "$*" >&2
+  printf 'air: %s\n' "$*" >&2
   exit 1
 }
 
@@ -110,15 +110,15 @@ fi
 verify_checksum "$tmp_dir/$asset" "$tmp_dir/checksums.txt" "$asset"
 
 tar -xzf "$tmp_dir/$asset" -C "$tmp_dir"
-binary=$(find "$tmp_dir" -type f -name airoute -perm -u+x | head -n 1)
-[ -n "$binary" ] || fail "the release archive did not contain the airoute binary"
+binary=$(find "$tmp_dir" -type f \( -name air -o -name airoute \) -perm -u+x | head -n 1)
+[ -n "$binary" ] || fail "the release archive did not contain the air binary"
 
 mkdir -p "$INSTALL_DIR"
-install -m 0755 "$binary" "$INSTALL_DIR/airoute"
+install -m 0755 "$binary" "$INSTALL_DIR/air"
 
-say "Installed airoute to $INSTALL_DIR/airoute"
+say "Installed air to $INSTALL_DIR/air"
 case ":${PATH:-}:" in
   *":$INSTALL_DIR:"*) ;;
-  *) say "Add $INSTALL_DIR to PATH to run airoute from any shell." ;;
+  *) say "Add $INSTALL_DIR to PATH to run air from any shell." ;;
 esac
-say "Run 'airoute version' to verify the installation."
+say "Run 'air version' to verify the installation."

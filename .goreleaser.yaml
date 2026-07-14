@@ -6,7 +6,7 @@ before:
 builds:
   - id: airoute
     main: ./cmd/airoute
-    binary: airoute
+    binary: air
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]

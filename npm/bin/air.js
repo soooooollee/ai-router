@@ -9,12 +9,12 @@ const binary = path.resolve(
   __dirname,
   "..",
   "vendor",
-  process.platform === "win32" ? "airoute.exe" : "airoute",
+  process.platform === "win32" ? "air.exe" : "air",
 );
 
 const child = spawn(binary, process.argv.slice(2), { stdio: "inherit" });
 child.on("error", (error) => {
-  process.stderr.write(`airoute: ${error.message}\nTry reinstalling with: npm install --global airoute-cli@latest\n`);
+  process.stderr.write(`air: ${error.message}\nTry reinstalling with: npm install --global airoute-cli@latest\n`);
   process.exit(1);
 });
 child.on("exit", (code, signal) => {

@@ -97,7 +97,8 @@ async function install(options = {}) {
   const archive = path.join(temporary, asset);
   const checksumsPath = path.join(temporary, "checksums.txt");
   const vendor = path.join(packageRoot, "vendor");
-  const binaryName = process.platform === "win32" ? "airoute.exe" : "airoute";
+  const binaryName = process.platform === "win32" ? "air.exe" : "air";
+  const legacyBinaryName = process.platform === "win32" ? "airoute.exe" : "airoute";
 
   try {
     process.stdout.write(`Downloading AI Router v${version} for ${process.platform}/${process.arch}...\n`);
@@ -117,6 +118,10 @@ async function install(options = {}) {
     extract(archive, vendor);
 
     const binary = path.join(vendor, binaryName);
+    const legacyBinary = path.join(vendor, legacyBinaryName);
+    if (!fs.existsSync(binary) && fs.existsSync(legacyBinary)) {
+      fs.renameSync(legacyBinary, binary);
+    }
     if (!fs.existsSync(binary)) {
       throw new Error(`release archive did not contain ${binaryName}`);
     }

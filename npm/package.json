@@ -23,7 +23,7 @@
     "node": ">=18"
   },
   "bin": {
-    "airoute": "bin/airoute.js"
+    "air": "bin/air.js"
   },
   "files": [
     "bin",

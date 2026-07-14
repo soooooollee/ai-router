@@ -11,11 +11,11 @@ payload="$tmp/payload"
 install_dir="$tmp/bin"
 mkdir -p "$release" "$payload"
 
-cat >"$payload/airoute" <<'SCRIPT'
+cat >"$payload/air" <<'SCRIPT'
 #!/bin/sh
-printf 'airoute test-version\n'
+printf 'air test-version\n'
 SCRIPT
-chmod 0755 "$payload/airoute"
+chmod 0755 "$payload/air"
 
 case "$(uname -s)" in
   Darwin) os=darwin ;;
@@ -29,7 +29,7 @@ case "$(uname -m)" in
 esac
 
 asset="airoute_9.9.9_${os}_${arch}.tar.gz"
-tar -czf "$release/$asset" -C "$payload" airoute
+tar -czf "$release/$asset" -C "$payload" air
 if command -v sha256sum >/dev/null 2>&1; then
   checksum=$(sha256sum "$release/$asset" | awk '{print $1}')
 else
@@ -42,5 +42,5 @@ AIROUTE_DOWNLOAD_BASE="file://$release" \
 AIROUTE_INSTALL_DIR="$install_dir" \
   sh "$root/install.sh" >/dev/null
 
-test "$("$install_dir/airoute")" = "airoute test-version"
+test "$("$install_dir/air")" = "air test-version"
 printf 'install.sh test passed\n'
