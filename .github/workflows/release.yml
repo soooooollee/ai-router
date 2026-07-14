@@ -40,6 +40,14 @@ jobs:
       - name: Test npm package
         working-directory: npm
         run: npm ci --ignore-scripts && npm test
+      - name: Attach npm package
+        working-directory: npm
+        run: |
+          npm pack --pack-destination ../dist
+          mv "../dist/airoute-cli-${GITHUB_REF_NAME#v}.tgz" ../dist/airoute-cli.tgz
+          gh release upload "${GITHUB_REF_NAME}" ../dist/airoute-cli.tgz --clobber
+        env:
+          GH_TOKEN: "${{ secrets.GITHUB_TOKEN }}"
       - name: Publish npm package
         if: env.NPM_TOKEN != ''
         working-directory: npm

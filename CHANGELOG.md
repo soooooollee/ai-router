@@ -7,6 +7,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 ### Added
 
 - Add contribution, conduct, security, issue, pull request and editor configuration files for the public repository.
+- Attach an installable npm tarball to every GitHub Release so npm installation works before registry publishing is configured.
 
 ### Removed
 

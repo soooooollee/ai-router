@@ -31,7 +31,7 @@ curl -fsSL https://raw.githubusercontent.com/soooooollee/ai-router/main/install.
 npm on macOS, Linux, or Windows:
 
 ```bash
-npm install --global airoute-cli@latest
+npm install --global https://github.com/soooooollee/ai-router/releases/latest/download/airoute-cli.tgz
 ```
 
 Homebrew on macOS or Linux:
