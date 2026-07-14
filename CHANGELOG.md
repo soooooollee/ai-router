@@ -4,6 +4,36 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.2.1] - 2026-07-14
+
+### Added
+
+- Add complete Codex and MiMo Code application adapters with installation detection, live previews, atomic configuration writes, gateway verification, backup deletion and rollback.
+- Add verified shell, npm and Homebrew installation paths with release automation and checksum validation.
+
+### Changed
+
+- Show the complete Claude application configuration path in a hover and keyboard-focus tooltip.
+- Keep the application write action at the standard button font size and give its longer label more width.
+- Use normal-sized, emphasized text for application configuration notices.
+- Initialize new routes from the selected upstream model and keep raw schema validation details out of the route form.
+- Restore standard typography and spacing throughout the application backup list.
+- Add guarded backup deletion and side-by-side current/merged application configuration previews.
+- Keep the current and merged configuration preview controls equal in size.
+- Hide internal provider IDs from the model service table to avoid repeating the visible model name.
+- Collapse duplicate service/model labels in route targets while retaining service context when the names differ.
+- Keep generated route aliases and IDs synchronized with upstream selection until the user edits them manually.
+- Generate new route IDs from the client alias, protocol and a millisecond timestamp to avoid collisions between repeated model mappings.
+- Filter application model selectors by each application's client protocol and label options as `alias → protocol`, removing duplicate aliases that cannot be distinguished by the application configuration.
+- Replace manual application preview refreshes with debounced live previews while retaining a final pre-write preview check.
+- Moved the default gateway and Web control-plane listeners from `8080/8081` to `12666/12667` to reduce local port conflicts; explicitly configured listeners remain unchanged.
+- Rewrote the README around installation, Web setup, SDK and application integration, Docker operation, security and port migration.
+- Allowed an empty onboarding configuration so first launch no longer seeds an OpenAI Provider or default route.
+- Made Provider deletion remove its route targets and any routes left without targets, including an obsolete default route.
+- Migrated legacy local application URLs using the old `8080` default to the active gateway shown by the control plane.
+- Render OpenAI Responses string input as one chat message instead of one message per character.
+- Reduce the default in-memory request history from 500 entries to 50 and clarify the body-capture-only save notification.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added
@@ -41,6 +71,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.0...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.1...HEAD
+[0.2.1]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.1
 [0.2.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.0
 [0.1.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.1.0

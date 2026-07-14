@@ -12,7 +12,13 @@ import { Save } from "lucide-react";
 import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { protocolName } from "../../lib";
+import {
+  generatedRouteID,
+  protocolName,
+  providerModelLabel,
+  routeIdentifier,
+  routeIDTimestamp,
+} from "../../lib";
 import type { Provider, RouteConfig } from "../../types";
 
 function routeAddress(gateway: string, protocol: string, model: string) {
@@ -48,8 +54,10 @@ export function RoutesPage({
   const [pendingDelete, setPendingDelete] = useState<RouteConfig | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [notice, noticeContext] = notification.useNotification();
-  const providerName = (id: string) =>
-    providers.find((provider) => provider.id === id)?.name || id;
+  const targetLabel = (providerID: string, model: string) => {
+    const provider = providers.find((item) => item.id === providerID);
+    return providerModelLabel(provider?.name, providerID, model);
+  };
   async function remove() {
     if (!pendingDelete) return;
     setDeleting(true);
@@ -94,14 +102,14 @@ export function RoutesPage({
       render: (_, route) => (
         <Tooltip
           title={route.targets
-            .map((target) => `${providerName(target.provider)} / ${target.model}`)
+            .map((target) => targetLabel(target.provider, target.model))
             .join("\n")}
           placement="topLeft"
         >
           <div className="table-route-target">
             {route.targets.map((target, index) => (
               <code key={`${target.provider}-${target.model}-${index}`}>
-                {providerName(target.provider)} / {target.model}
+                {targetLabel(target.provider, target.model)}
               </code>
             ))}
           </div>
@@ -222,10 +230,16 @@ function RouteDialog({
   saved: (y: string, h: string) => void;
 }) {
   const raw = (parse(yaml)?.routes || []).find((r: any) => r.id === existing);
+  const initialProvider = providers[0];
+  const initialUpstreamModel = initialProvider?.models?.[0] || "";
+  const initialAlias = routeIdentifier(initialUpstreamModel);
+	const [generatedAt] = useState(() => routeIDTimestamp());
+	const initialProtocol = raw?.match?.protocol || "anthropic-messages";
   const [form, setForm] = useState({
-    id: raw?.id || "",
-    model: raw?.match?.model || "",
-    protocol: raw?.match?.protocol || "anthropic-messages",
+	id:
+		raw?.id || generatedRouteID(initialAlias, initialProtocol, generatedAt),
+    model: raw?.match?.model || initialAlias,
+	protocol: initialProtocol,
     stream: raw?.match?.stream === undefined ? "any" : String(raw.match.stream),
     tools: raw?.match?.tools === undefined ? "any" : String(raw.match.tools),
     image: raw?.match?.image === undefined ? "any" : String(raw.match.image),
@@ -236,8 +250,10 @@ function RouteDialog({
       (raw?.targets || [])
         .map((t: any) => `${t.provider}:${t.model}`)
         .join(", ") ||
-      `${providers[0]?.id || "provider"}:${providers[0]?.models?.[0] || "model"}`,
+      `${initialProvider?.id || ""}:${initialUpstreamModel}`,
   });
+  const [modelEdited, setModelEdited] = useState(false);
+  const [idEdited, setIDEdited] = useState(false);
   const [error, setError] = useState("");
   async function save() {
     try {
@@ -260,17 +276,31 @@ function RouteDialog({
           }),
       );
       if (Object.keys(headers).length) match.headers = headers;
-      const targets = form.targets.split(",").map((x: string) => {
+      const targets: Array<{ provider: string; model: string }> = form.targets.split(",").map((x: string) => {
         const [provider, ...model] = x.trim().split(":");
         return { provider, model: model.join(":") };
       });
+      if (targets.some((target) => !target.provider || !target.model)) {
+        throw new Error("请选择一个有效的上游模型。");
+      }
+      const modelAlias = form.model.trim() || routeIdentifier(targets[0].model);
+	  const routeID =
+		  form.id.trim() ||
+		  generatedRouteID(modelAlias, form.protocol, routeIDTimestamp());
       const value = {
         ...raw,
-        id: form.id,
+        id: routeID,
         priority: raw?.priority ?? 100,
-        match,
+        match: { ...match, model: modelAlias },
         targets,
       };
+      if (
+        doc.routes.some(
+          (route: any) => route.id === routeID && route.id !== existing,
+        )
+      ) {
+        throw new Error(`路由 ID “${routeID}” 已存在，请修改客户端模型名或高级设置中的路由 ID。`);
+      }
       if (existing === null) doc.routes.push(value);
       else
         doc.routes = doc.routes.map((r: any) =>
@@ -284,7 +314,12 @@ function RouteDialog({
       saved(next, r.hash);
       close();
     } catch (e) {
-      setError((e as Error).message);
+      const message = (e as Error).message;
+      setError(
+        /config schema:|jsonschema:/i.test(message)
+          ? "路由配置未通过校验，请检查客户端模型名、路由 ID 和目标上游模型。"
+          : message,
+      );
     }
   }
   return (
@@ -311,17 +346,17 @@ function RouteDialog({
               onChange={(e) => {
                 const selected = e.target.value;
                 const model = selected.split(":").slice(1).join(":");
-                const alias =
-                  model
-                    .split("/")
-                    .pop()
-                    ?.toLowerCase()
-                    .replace(/[^a-z0-9.-]+/g, "-") || "model";
+                const alias = routeIdentifier(model);
+                const nextModel =
+                  existing === null && !modelEdited ? alias : form.model;
                 setForm({
                   ...form,
                   targets: selected,
-                  model: form.model || alias,
-                  id: form.id || alias,
+                  model: nextModel,
+                  id:
+                    existing === null && !idEdited
+                      ? generatedRouteID(nextModel, form.protocol, generatedAt)
+                      : form.id,
                 });
               }}
             >
@@ -331,7 +366,7 @@ function RouteDialog({
                     key={`${provider.id}:${model}`}
                     value={`${provider.id}:${model}`}
                   >
-                    {provider.name || provider.id} / {model}
+                    {providerModelLabel(provider.name, provider.id, model)}
                   </option>
                 )),
               )}
@@ -343,13 +378,18 @@ function RouteDialog({
               aria-label="客户端模型名"
               placeholder="例如 coding-model"
               value={form.model}
-              onChange={(e) =>
+              onChange={(e) => {
+                const model = e.target.value;
+                setModelEdited(true);
                 setForm({
                   ...form,
-                  model: e.target.value,
-                  id: existing === null ? e.target.value : form.id,
-                })
-              }
+                  model,
+                  id:
+                    existing === null && !idEdited
+                      ? generatedRouteID(model, form.protocol, generatedAt)
+                      : form.id,
+                });
+              }}
             />
           </label>
           <label>
@@ -357,7 +397,17 @@ function RouteDialog({
             <select
               aria-label="客户端调用协议"
               value={form.protocol}
-              onChange={(e) => setForm({ ...form, protocol: e.target.value })}
+			  onChange={(e) => {
+				  const protocol = e.target.value;
+				  setForm({
+					  ...form,
+					  protocol,
+					  id:
+						  existing === null && !idEdited
+							  ? generatedRouteID(form.model, protocol, generatedAt)
+							  : form.id,
+				  });
+			  }}
             >
               <option value="anthropic-messages">Claude / Anthropic</option>
               <option value="openai-chat">OpenAI Chat</option>
@@ -382,7 +432,10 @@ function RouteDialog({
               路由 ID
               <input
                 value={form.id}
-                onChange={(e) => setForm({ ...form, id: e.target.value })}
+                onChange={(e) => {
+                  setIDEdited(true);
+                  setForm({ ...form, id: e.target.value });
+                }}
               />
             </label>
             {(["stream", "tools", "image"] as const).map((key) => (

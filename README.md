@@ -1,124 +1,216 @@
-# AI Router
+<div align="center">
+  <a href="https://github.com/soooooollee/ai-router">
+    <img src="web/public/favicon.svg" width="168" alt="AI Router">
+  </a>
 
-Web 控制台按“模型接入 → 路由配置 → 应用配置”组织，并提供独立的系统设置页：接入时可用真实请求自动识别 OpenAI、Anthropic、Gemini 及 Qwen/MiMo 模型族；路由页选择模型和客户端输出协议；应用配置页由通用 Adapter 驱动，当前完整支持 Claude Code 的检测、预览、写入、验证、备份和回滚；设置页编辑唯一的 YAML 配置并显示本次变更的真实生效方式。
+  <h1>AI Router</h1>
 
-AI Router 是一个精简的 AI 协议转换与模型路由网关。它以单个 Go 二进制运行，同时提供网关 API、CLI 和内嵌 Web 控制台；YAML 配置文件始终是唯一事实来源。
+  <p><strong>One local gateway. Four AI protocols. Any model.</strong></p>
+  <p>Route and translate OpenAI, Anthropic, Gemini, and compatible model APIs from a single local endpoint.</p>
 
-支持以下协议作为客户端入口和 Provider 出口：
+  <p>
+    <a href="README.md">English</a> ·
+    <a href="README_ZH.md">简体中文</a>
+  </p>
 
-- OpenAI Chat Completions
-- OpenAI Responses
-- Anthropic Messages
-- Gemini Generate Content
+  <p>
+    <a href="https://github.com/soooooollee/ai-router/releases"><img src="https://img.shields.io/github/v/release/soooooollee/ai-router?style=flat-square&label=release&color=4f73ff" alt="Release"></a>
+    <a href="https://github.com/soooooollee/ai-router/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/soooooollee/ai-router/ci.yml?branch=main&style=flat-square&label=build&color=4f73ff" alt="Build"></a>
+    <a href="https://github.com/soooooollee/ai-router/blob/main/LICENSE"><img src="https://img.shields.io/github/license/soooooollee/ai-router?style=flat-square&label=license&color=4f73ff" alt="License"></a>
+    <a href="https://github.com/soooooollee/ai-router/commits/main"><img src="https://img.shields.io/github/commit-activity/y/soooooollee/ai-router?style=flat-square&label=commits&color=4f73ff" alt="Commits"></a>
+  </p>
+</div>
 
-支持文本、图片、Tool Calling、结构化输出、Reasoning、usage、错误映射及 SSE 流式转换。同协议请求自动使用保留原生字段的快速路径。
+AI Router is a local-first protocol conversion and model routing gateway. It runs as a single Go binary, requires no external database, and uses one versioned YAML file as its source of truth.
 
-## 快速开始
+The embedded web console manages providers, model aliases, protocol-aware routes, developer-tool configuration, runtime metrics, and request logs. Every configuration change is validated, backed up, and atomically written.
 
-要求：Go 1.24+；只有修改 Web 控制台时才需要 Node.js 22+。
+## Why AI Router?
+
+- **One endpoint** for OpenAI Chat Completions, OpenAI Responses, Anthropic Messages, and Gemini Generate Content.
+- **Cross-protocol routing** between compatible clients and providers.
+- **Simple model aliases** that hide upstream provider and model names.
+- **Reliable execution** with bounded retries, ordered fallback, timeouts, and output limits.
+- **Developer-tool setup** for Claude Code, Claude App, Codex, and MiMo Code.
+- **Local observability** for status, latency, tokens, routing attempts, and optional conversation bodies.
+- **Provider compatibility** for Qwen 3.x, SiliconFlow, and Xiaomi MiMo.
+
+## Setup
+
+Install with the shell installer on macOS or Linux:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/soooooollee/ai-router/main/install.sh | sh
+```
+
+Or install with npm on macOS, Linux, or Windows:
+
+```bash
+npm install --global airoute-cli@latest
+```
+
+Or install with Homebrew on macOS or Linux:
+
+```bash
+brew install soooooollee/tap/airoute
+```
+
+You can also download an archive from [GitHub Releases](https://github.com/soooooollee/ai-router/releases), extract it, and place `airoute` in `PATH`.
+
+To build from source, use Go 1.24+:
+
+```bash
+git clone https://github.com/soooooollee/ai-router.git
+cd ai-router
+make build
+```
+
+Create a minimal configuration and start the gateway:
 
 ```bash
 cp examples/airoute.minimal.yaml airoute.yaml
-# 编辑 airoute.yaml，将 api_key 替换为实际密钥
-make build
-./bin/airoute check --config airoute.yaml
-./bin/airoute serve --config airoute.yaml
+chmod 600 airoute.yaml
+
+airoute check --config airoute.yaml
+airoute doctor --config airoute.yaml
+airoute serve --config airoute.yaml
 ```
 
-默认地址：
+For a source build, use `./bin/airoute` in place of `airoute`.
 
-- 网关：`http://127.0.0.1:8080`
-- Web 控制台：`http://127.0.0.1:8081`
-- 健康检查：`http://127.0.0.1:8080/healthz`
-
-OpenAI SDK 示例：
+Open the web console at <http://127.0.0.1:12667>, or run:
 
 ```bash
-curl http://127.0.0.1:8080/v1/chat/completions \
+airoute ui
+```
+
+Default endpoints:
+
+| Service | Address |
+| --- | --- |
+| Model gateway | `http://127.0.0.1:12666` |
+| Web console | `http://127.0.0.1:12667` |
+| Health check | `http://127.0.0.1:12666/healthz` |
+
+The minimal configuration intentionally contains no provider or default model. Add your first model through the web console.
+
+## Connect
+
+AI Router exposes four client-compatible endpoints:
+
+| Protocol | Endpoint |
+| --- | --- |
+| OpenAI Chat Completions | `/v1/chat/completions` |
+| OpenAI Responses | `/v1/responses` |
+| Anthropic Messages | `/v1/messages` |
+| Gemini Generate Content | `/v1beta/models/{model}:generateContent` |
+
+Existing SDKs usually only need a different base URL:
+
+```python
+from openai import OpenAI
+
+client = OpenAI(
+    base_url="http://127.0.0.1:12666/v1",
+    api_key="airoute-local",
+)
+
+response = client.chat.completions.create(
+    model="coding-model",
+    messages=[{"role": "user", "content": "hello"}],
+)
+
+print(response.choices[0].message.content)
+```
+
+When client authentication is enabled, use a configured client key. Otherwise, any non-empty placeholder satisfies SDK validation.
+
+<details>
+<summary><strong>cURL examples</strong></summary>
+
+```bash
+# OpenAI Chat Completions
+curl http://127.0.0.1:12666/v1/chat/completions \
   -H 'content-type: application/json' \
-  -d '{"model":"gpt-5-mini","messages":[{"role":"user","content":"hello"}]}'
-```
+  -d '{"model":"coding-model","messages":[{"role":"user","content":"hello"}]}'
 
-Anthropic SDK 兼容入口：
-
-```bash
-curl http://127.0.0.1:8080/v1/messages \
+# OpenAI Responses
+curl http://127.0.0.1:12666/v1/responses \
   -H 'content-type: application/json' \
-  -d '{"model":"gpt-5-mini","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
+  -d '{"model":"coding-model","input":"hello"}'
+
+# Anthropic Messages
+curl http://127.0.0.1:12666/v1/messages \
+  -H 'content-type: application/json' \
+  -d '{"model":"coding-model","max_tokens":256,"messages":[{"role":"user","content":"hello"}]}'
+
+# Gemini Generate Content
+curl http://127.0.0.1:12666/v1beta/models/coding-model:generateContent \
+  -H 'content-type: application/json' \
+  -d '{"contents":[{"role":"user","parts":[{"text":"hello"}]}]}'
 ```
 
-配置模型别名后，客户端无需知道真实 Provider 或模型名称。完整配置见 [examples/airoute.full.yaml](examples/airoute.full.yaml)。
+</details>
 
-Qwen 3.x、SiliconFlow 与 Xiaomi MiMo 示例见 [examples/airoute.qwen3.yaml](examples/airoute.qwen3.yaml)。Provider API Key 直接保存在本机配置中，并会在模型接入和系统设置页面显示实际值；相关配置文件与备份使用 `0600` 权限。
+## Configure
 
-Claude Code 接入流程：先在“模型接入”完成 Provider 测试并保存，再在“路由配置”创建 Anthropic Messages 输出路由，最后进入“应用配置”选择该路由并写入。应用验证分为安装检测、配置同步、真实网关请求和可选的受控 CLI Smoke Test；CLI 参数由 Adapter 固定，不接受任意 Shell 命令。
+Use the web console in this order:
 
-## CLI
+1. **Model Providers** — enter the upstream API URL, key, and model name, then run protocol detection.
+2. **Routes** — create a client-facing model alias and choose its provider, upstream model, and client protocol.
+3. **Applications** — preview, write, verify, back up, and restore developer-tool configuration.
+4. **Overview and Logs** — inspect runtime metrics, upstream attempts, diagnostics, and optional conversation bodies.
+5. **Settings** — manage the full YAML configuration, persistence, body capture, and web redaction.
 
-```text
-airoute serve      启动网关和 Web 控制台
-airoute check      校验配置
-airoute convert    离线转换协议 JSON
-airoute doctor     检查配置和监听端口
-airoute models     列出 Provider 模型
-airoute routes     列出路由
-airoute probe      探测 Provider
-airoute status     查询运行状态
-airoute ui         打开 Web 控制台
-airoute version    输出构建版本
-```
+The default in-memory request history is 50 entries. Request and response bodies are disabled by default and should only be enabled when needed.
 
-离线转换示例：
+## Developer Tools
 
-```bash
-airoute convert --from openai-chat --to anthropic-messages request.json
-```
+| Application | Required client protocol |
+| --- | --- |
+| Claude Code | Anthropic Messages |
+| Claude App | Anthropic Messages |
+| Codex | OpenAI Responses |
+| MiMo Code | OpenAI Chat |
+
+Codex configuration includes a managed `airoute-model-catalog.json` so custom model aliases have complete model metadata. The Responses stream includes the output-item lifecycle required for reasoning, text, and tool calls. MiMo capabilities follow the [official Xiaomi MiMo Codex configuration guide](https://mimo.mi.com/docs/zh-CN/tokenplan/integration/codex-configuration).
 
 ## Docker
 
 ```bash
 mkdir -p data
 cp examples/airoute.docker.yaml data/airoute.yaml
-AIROUTE_UID="$(id -u)" AIROUTE_GID="$(id -g)" docker compose up --build
+
+export AIROUTE_ADMIN_TOKEN='replace-with-at-least-24-characters'
+export AIROUTE_CLIENT_KEY='replace-with-client-key'
+export OPENAI_API_KEY='replace-with-provider-key'
+
+AIROUTE_UID="$(id -u)" AIROUTE_GID="$(id -g)" docker compose up --build -d
 ```
 
-Compose 挂载整个 `data/` 目录，使 Web 的原子保存、备份和回滚在容器内仍然可用；Linux 下通过当前 UID/GID 保持文件归属。管理端口仅绑定本机。若配置中的 Provider 指向本机或私网地址，需要对该 Provider 明确设置 `allow_private_url: true`。
+Compose exposes the gateway on `0.0.0.0:12666` and the web console on `127.0.0.1:12667`.
 
-## 设计
+## Documentation
 
-所有协议先解码为 Canonical Request IR；所有流式响应先解码为 Canonical Event IR。因此增加一种协议只需增加一个 Adapter，而不是实现与所有现有协议的两两转换。无法无损表达的字段由 `strict`、`warn` 或 `drop` 策略处理，并产生稳定的诊断码。
+- [Configuration](docs/configuration.md)
+- [Protocol conversion](docs/protocols.md)
+- [Routing and fallback](docs/routing.md)
+- [Qwen 3.x and MiMo compatibility](docs/qwen3-compatibility.md)
+- [Security boundaries](docs/security.md)
+- [Administration API](docs/openapi.yaml)
+- [Configuration migrations](docs/migrations.md)
+- [Release verification](docs/verification.md)
 
-进一步说明：
-
-- [配置](docs/configuration.md)
-- [协议转换](docs/protocols.md)
-- [Qwen 3.x / MiMo 兼容验证](docs/qwen3-compatibility.md)
-- [路由与 Fallback](docs/routing.md)
-- [安全](docs/security.md)
-- [管理 API](docs/openapi.yaml)
-- [配置迁移](docs/migrations.md)
-- [发布验收记录](docs/verification.md)
-- [构建计划验收审计](docs/acceptance.md)
-- [完整构建计划](AI_ROUTER_BUILD_PLAN.md)
-- [本轮优化推进与完成状态](AI_ROUTER_OPTIMIZATION_ROADMAP.md)
-
-## 验证
+## Development
 
 ```bash
+make test
 make release-check
 make web-e2e
 ```
 
-测试覆盖四协议请求、响应和流式事件的 16 种转换方向，以及网关端到端转换、重试、Fallback、五个独立 Web 工作流和通用应用 Adapter。
-
-Anthropic Token Count 入口优先转发给具备原生计数能力的目标 Provider；不可用时使用独立的 Unicode 词法估算器，并返回 `estimated: true`、策略名和 System/消息/Tools/媒体拆分，普通生成请求不会受计数失败影响。
-
-正式发行前运行持续压力测试：
-
-```bash
-AIROUTE_SOAK_DURATION=24h go test ./internal/gateway -run TestLongSoak -count=1 -timeout=25h
-```
+`release-check` runs web tests and builds, Go formatting checks, Vet, race tests, and amd64/arm64 cross-builds for Linux, macOS, and Windows.
 
 ## License
 
-MIT
+AI Router is licensed under the [MIT License](LICENSE).

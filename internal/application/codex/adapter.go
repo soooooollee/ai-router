@@ -1,0 +1,563 @@
+package codex
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/zbss/airoute/internal/application"
+	"github.com/zbss/airoute/internal/safefile"
+)
+
+const backupMarker = ".airoute.bak."
+const catalogName = "airoute-model-catalog.json"
+const backupBundleFormat = "airoute.codex.backup.v1"
+
+type DesiredConfig struct {
+	BaseURL string   `json:"base_url"`
+	APIKey  string   `json:"api_key"`
+	Model   string   `json:"model"`
+	Models  []string `json:"models,omitempty"`
+}
+
+type Adapter struct {
+	ConfigPath string
+	HTTPClient *http.Client
+	LookPath   func(string) (string, error)
+}
+
+type fileSnapshot struct {
+	Exists  bool   `json:"exists"`
+	Content []byte `json:"content,omitempty"`
+}
+
+type backupBundle struct {
+	Format  string       `json:"format"`
+	Config  fileSnapshot `json:"config"`
+	Catalog fileSnapshot `json:"catalog"`
+}
+
+func New() *Adapter {
+	return &Adapter{HTTPClient: &http.Client{Timeout: 60 * time.Second}, LookPath: exec.LookPath}
+}
+
+func (a *Adapter) Manifest() application.Manifest {
+	return application.Manifest{ID: "codex", Name: "Codex", Description: "OpenAI 编码助手", Status: "available", Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback}, ConfigFormat: "toml"}
+}
+
+func (a *Adapter) path() (string, error) {
+	if value := strings.TrimSpace(a.ConfigPath); value != "" {
+		return value, nil
+	}
+	if value := strings.TrimSpace(os.Getenv("AIROUTE_CODEX_CONFIG_PATH")); value != "" {
+		return value, nil
+	}
+	if home := strings.TrimSpace(os.Getenv("CODEX_HOME")); home != "" {
+		return filepath.Join(home, "config.toml"), nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".codex", "config.toml"), nil
+}
+
+func (a *Adapter) executable() (string, error) {
+	if value := strings.TrimSpace(os.Getenv("AIROUTE_CODEX_EXECUTABLE")); value != "" {
+		return value, nil
+	}
+	lookPath := a.LookPath
+	if lookPath == nil {
+		lookPath = exec.LookPath
+	}
+	return lookPath("codex")
+}
+
+func (a *Adapter) Detect(ctx context.Context) (application.Detection, error) {
+	path, err := a.executable()
+	if err != nil {
+		return application.Detection{Installed: false, Message: "未检测到 Codex 命令"}, nil
+	}
+	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
+	defer cancel()
+	output, commandErr := exec.CommandContext(checkCtx, path, "--version").CombinedOutput()
+	version := strings.TrimSpace(string(output))
+	if commandErr != nil {
+		return application.Detection{Installed: true, Executable: path, Version: version, Message: "已检测到 Codex，但版本读取失败"}, nil
+	}
+	return application.Detection{Installed: true, Executable: path, Version: version, Message: "Codex 已安装"}, nil
+}
+
+func read(path string) ([]byte, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return nil, nil
+	}
+	return raw, err
+}
+
+func decodeDesired(raw json.RawMessage) (DesiredConfig, error) {
+	var desired DesiredConfig
+	if err := json.Unmarshal(raw, &desired); err != nil {
+		return desired, fmt.Errorf("Codex 配置无效: %w", err)
+	}
+	desired.BaseURL = strings.TrimRight(strings.TrimSpace(desired.BaseURL), "/")
+	if !strings.HasSuffix(desired.BaseURL, "/v1") {
+		desired.BaseURL += "/v1"
+	}
+	desired.APIKey = strings.TrimSpace(desired.APIKey)
+	desired.Model = strings.TrimSpace(desired.Model)
+	if desired.BaseURL == "/v1" || desired.Model == "" {
+		return desired, errors.New("网关地址和默认模型为必填项")
+	}
+	if desired.APIKey == "" {
+		desired.APIKey = "airoute-local"
+	}
+	return desired, nil
+}
+
+func tomlString(value string) string { return strconv.Quote(value) }
+
+func parseString(line string) string {
+	_, value, ok := strings.Cut(line, "=")
+	if !ok {
+		return ""
+	}
+	value = strings.TrimSpace(strings.SplitN(value, "#", 2)[0])
+	if decoded, err := strconv.Unquote(value); err == nil {
+		return decoded
+	}
+	return strings.Trim(value, "'\"")
+}
+
+func managed(raw []byte) map[string]any {
+	result := map[string]any{}
+	section := ""
+	for _, line := range strings.Split(string(raw), "\n") {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = trimmed
+			continue
+		}
+		key := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[0])
+		if section == "" && key == "model" {
+			result["model"] = parseString(trimmed)
+		}
+		if section == "" && key == "model_provider" {
+			result["provider"] = parseString(trimmed)
+		}
+		if section == "" && key == "model_catalog_json" {
+			result["model_catalog_json"] = parseString(trimmed)
+		}
+		if section == "[model_providers.airoute]" {
+			switch key {
+			case "base_url":
+				result["base_url"] = parseString(trimmed)
+			case "experimental_bearer_token":
+				result["api_key"] = parseString(trimmed)
+			}
+		}
+	}
+	return result
+}
+
+func merge(current []byte, desired DesiredConfig, catalogPath string) []byte {
+	lines := strings.Split(string(current), "\n")
+	out := make([]string, 0, len(lines)+10)
+	section := ""
+	skippingAiroute := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = trimmed
+			skippingAiroute = section == "[model_providers.airoute]"
+			if skippingAiroute {
+				continue
+			}
+		}
+		if skippingAiroute {
+			continue
+		}
+		key := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[0])
+		if section == "" && isManagedRootKey(key) {
+			continue
+		}
+		out = append(out, line)
+	}
+	body := strings.TrimSpace(strings.Join(out, "\n"))
+	managedBlock := strings.Join([]string{
+		"model = " + tomlString(desired.Model),
+		"model_provider = \"airoute\"",
+		"model_catalog_json = " + tomlString(catalogPath),
+		"model_reasoning_effort = \"high\"",
+		"model_supports_reasoning_summaries = true",
+		"model_reasoning_summary = \"none\"",
+		"model_context_window = " + strconv.Itoa(modelContextWindow(desired.Model)),
+		"web_search = \"disabled\"",
+		"",
+		"[model_providers.airoute]",
+		"name = \"AI Router\"",
+		"base_url = " + tomlString(desired.BaseURL),
+		"wire_api = \"responses\"",
+		"requires_openai_auth = false",
+		"experimental_bearer_token = " + tomlString(desired.APIKey),
+	}, "\n")
+	if body == "" {
+		return []byte(managedBlock + "\n")
+	}
+	return []byte(managedBlock + "\n\n" + body + "\n")
+}
+
+func isManagedRootKey(key string) bool {
+	switch key {
+	case "model", "model_provider", "model_catalog_json", "model_reasoning_effort", "model_supports_reasoning_summaries", "model_reasoning_summary", "model_context_window", "web_search":
+		return true
+	default:
+		return false
+	}
+}
+
+func modelContextWindow(model string) int {
+	if strings.Contains(strings.ToLower(model), "mimo-v2.5") {
+		return 1048576
+	}
+	return 262144
+}
+
+func catalogModels(desired DesiredConfig) []string {
+	seen := map[string]bool{}
+	models := make([]string, 0, len(desired.Models)+1)
+	for _, model := range append([]string{desired.Model}, desired.Models...) {
+		model = strings.TrimSpace(model)
+		if model != "" && !seen[model] {
+			seen[model] = true
+			models = append(models, model)
+		}
+	}
+	return models
+}
+
+func modelCatalog(desired DesiredConfig) ([]byte, error) {
+	models := make([]map[string]any, 0, len(desired.Models)+1)
+	for priority, model := range catalogModels(desired) {
+		mimo := strings.Contains(strings.ToLower(model), "mimo-v2.5")
+		contextWindow := modelContextWindow(model)
+		levels := []map[string]string{
+			{"effort": "low", "description": "Low reasoning"},
+			{"effort": "medium", "description": "Medium reasoning"},
+			{"effort": "high", "description": "High reasoning"},
+		}
+		defaultLevel := "medium"
+		modalities := []string{"text", "image"}
+		supportVerbosity := true
+		if mimo {
+			levels = []map[string]string{
+				{"effort": "none", "description": "No reasoning"},
+				{"effort": "high", "description": "High reasoning"},
+			}
+			defaultLevel = "high"
+			supportVerbosity = false
+			if strings.Contains(strings.ToLower(model), "pro") {
+				modalities = []string{"text"}
+			}
+		}
+		models = append(models, map[string]any{
+			"slug":                             model,
+			"display_name":                     model,
+			"description":                      "AI Router route " + model,
+			"base_instructions":                "You are Codex, a coding agent.",
+			"context_window":                   contextWindow,
+			"max_context_window":               contextWindow,
+			"effective_context_window_percent": 95,
+			"default_reasoning_level":          defaultLevel,
+			"supported_reasoning_levels":       levels,
+			"supports_reasoning_summaries":     true,
+			"default_reasoning_summary":        "none",
+			"support_verbosity":                supportVerbosity,
+			"supports_parallel_tool_calls":     false,
+			"supports_search_tool":             false,
+			"supports_image_detail_original":   len(modalities) > 1,
+			"input_modalities":                 modalities,
+			"apply_patch_tool_type":            "freeform",
+			"shell_type":                       "shell_command",
+			"web_search_tool_type":             "text",
+			"supported_in_api":                 true,
+			"visibility":                       "list",
+			"priority":                         priority,
+			"truncation_policy":                map[string]any{"mode": "tokens", "limit": 10000},
+			"additional_speed_tiers":           []any{},
+			"service_tiers":                    []any{},
+			"experimental_supported_tools":     []any{},
+		})
+	}
+	return json.MarshalIndent(map[string]any{"models": models}, "", "  ")
+}
+
+func snapshot(path string) (fileSnapshot, error) {
+	raw, err := os.ReadFile(path)
+	if os.IsNotExist(err) {
+		return fileSnapshot{}, nil
+	}
+	if err != nil {
+		return fileSnapshot{}, err
+	}
+	return fileSnapshot{Exists: true, Content: raw}, nil
+}
+
+func restoreSnapshot(path string, state fileSnapshot) error {
+	if !state.Exists {
+		if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
+	}
+	return safefile.AtomicWrite(path, state.Content, 0600)
+}
+
+func createBundleBackup(configPath, catalogPath string) (string, error) {
+	configState, err := snapshot(configPath)
+	if err != nil {
+		return "", err
+	}
+	catalogState, err := snapshot(catalogPath)
+	if err != nil {
+		return "", err
+	}
+	if !configState.Exists && !catalogState.Exists {
+		return "", nil
+	}
+	raw, err := json.Marshal(backupBundle{Format: backupBundleFormat, Config: configState, Catalog: catalogState})
+	if err != nil {
+		return "", err
+	}
+	return safefile.BackupData(configPath, backupMarker, raw)
+}
+
+func backupName(path string) string {
+	if path == "" {
+		return ""
+	}
+	return filepath.Base(path)
+}
+
+func previewJSON(raw []byte) json.RawMessage {
+	encoded, _ := json.Marshal(string(raw))
+	return encoded
+}
+
+func lineDiff(before, after []byte) string {
+	left, right := strings.Split(string(before), "\n"), strings.Split(string(after), "\n")
+	lines := make([]string, 0)
+	for i := 0; i < max(len(left), len(right)) && len(lines) < 240; i++ {
+		var a, b string
+		if i < len(left) {
+			a = left[i]
+		}
+		if i < len(right) {
+			b = right[i]
+		}
+		if a == b {
+			continue
+		}
+		if i < len(left) {
+			lines = append(lines, "- "+a)
+		}
+		if i < len(right) {
+			lines = append(lines, "+ "+b)
+		}
+	}
+	if len(lines) == 0 {
+		return "没有配置变化"
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (a *Adapter) compose(raw json.RawMessage) (string, []byte, []byte, DesiredConfig, error) {
+	desired, err := decodeDesired(raw)
+	if err != nil {
+		return "", nil, nil, desired, err
+	}
+	path, err := a.path()
+	if err != nil {
+		return "", nil, nil, desired, err
+	}
+	current, err := read(path)
+	if err != nil {
+		return "", nil, nil, desired, err
+	}
+	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
+	return path, current, merge(current, desired, catalogPath), desired, nil
+}
+
+func (a *Adapter) Read(ctx context.Context) (application.State, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.State{}, err
+	}
+	raw, err := read(path)
+	if err != nil {
+		return application.State{}, err
+	}
+	detection, err := a.Detect(ctx)
+	if err != nil {
+		return application.State{}, err
+	}
+	state := managed(raw)
+	return application.State{Manifest: a.Manifest(), Detection: detection, Path: path, Exists: len(bytes.TrimSpace(raw)) > 0, Managed: state, PreservedFields: len(strings.Split(strings.TrimSpace(string(raw)), "\n")), Synced: state["provider"] == "airoute" && state["base_url"] != nil && state["model"] != nil}, nil
+}
+
+func (a *Adapter) Preview(_ context.Context, raw json.RawMessage) (application.Preview, error) {
+	path, current, next, _, err := a.compose(raw)
+	if err != nil {
+		return application.Preview{}, err
+	}
+	return application.Preview{Path: path, Current: previewJSON(current), Content: previewJSON(next), Diff: lineDiff(current, next), PreservedFields: len(strings.Split(strings.TrimSpace(string(current)), "\n")), WillCreateBackup: len(bytes.TrimSpace(current)) > 0}, nil
+}
+
+func (a *Adapter) Apply(_ context.Context, raw json.RawMessage) (application.ApplyResult, error) {
+	path, _, next, desired, err := a.compose(raw)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
+	catalog, err := modelCatalog(desired)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	previousCatalog, err := snapshot(catalogPath)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	backup, err := createBundleBackup(path, catalogPath)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	if err = safefile.AtomicWrite(catalogPath, append(catalog, '\n'), 0600); err != nil {
+		return application.ApplyResult{}, err
+	}
+	if err = safefile.AtomicWrite(path, next, 0600); err != nil {
+		_ = restoreSnapshot(catalogPath, previousCatalog)
+		return application.ApplyResult{}, err
+	}
+	state := managed(next)
+	if state["provider"] != "airoute" || state["model"] == nil {
+		return application.ApplyResult{}, errors.New("写入后的 Codex 配置无效")
+	}
+	_ = safefile.Prune(path, backupMarker, 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: backupName(backup)}, nil
+}
+
+func (a *Adapter) Verify(ctx context.Context, options application.VerifyOptions) (application.VerifyResult, error) {
+	result := application.VerifyResult{OK: true, Verified: time.Now().UTC()}
+	desired, err := decodeDesired(options.Config)
+	if err != nil {
+		return result, err
+	}
+	started := time.Now()
+	detection, _ := a.Detect(ctx)
+	result.Stages = append(result.Stages, application.VerifyStage{ID: "installation", Label: "安装检测", OK: detection.Installed, Message: detection.Message, Latency: time.Since(started).Milliseconds()})
+	if !detection.Installed {
+		result.OK = false
+	}
+	started = time.Now()
+	payload, _ := json.Marshal(map[string]any{"model": desired.Model, "input": "Reply with OK.", "max_output_tokens": 32, "stream": true, "reasoning": map[string]any{"effort": "high", "summary": "auto"}})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, desired.BaseURL+"/responses", bytes.NewReader(payload))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("authorization", "Bearer "+desired.APIKey)
+	resp, requestErr := a.HTTPClient.Do(req)
+	detail := desired.BaseURL + "/responses"
+	ok := requestErr == nil && resp.StatusCode >= 200 && resp.StatusCode < 300
+	if resp != nil {
+		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+		if readErr != nil {
+			ok = false
+			detail = readErr.Error()
+		} else if ok && (!bytes.Contains(body, []byte("response.output_item.added")) || !bytes.Contains(body, []byte("response.output_text.delta")) || !bytes.Contains(body, []byte("response.completed"))) {
+			ok = false
+			detail = "Responses 流缺少 Codex 必需的输出项生命周期事件"
+		}
+		if !ok {
+			if detail == desired.BaseURL+"/responses" {
+				detail = fmt.Sprintf("HTTP %d", resp.StatusCode)
+			}
+		}
+	}
+	if requestErr != nil {
+		detail = requestErr.Error()
+	}
+	if !ok {
+		result.OK = false
+	}
+	result.Stages = append(result.Stages, application.VerifyStage{ID: "gateway", Label: "网关链路", OK: ok, Message: map[bool]string{true: "Codex Responses 流式链路验证成功", false: "Codex Responses 流式链路验证失败"}[ok], Detail: detail, Latency: time.Since(started).Milliseconds()})
+	return result, nil
+}
+
+func (a *Adapter) Backups(_ context.Context) ([]application.Backup, error) {
+	path, err := a.path()
+	if err != nil {
+		return nil, err
+	}
+	entries, err := safefile.List(path, backupMarker)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]application.Backup, 0, len(entries))
+	for _, entry := range entries {
+		out = append(out, application.Backup{Name: entry.Name, Path: entry.Path, Size: entry.Size, ModifiedAt: entry.ModifiedAt, ContainsSensitive: true})
+	}
+	return out, nil
+}
+
+func (a *Adapter) DeleteBackup(_ context.Context, name string) error {
+	path, err := a.path()
+	if err != nil {
+		return err
+	}
+	return safefile.RemoveBackup(path, backupMarker, name)
+}
+
+func (a *Adapter) Rollback(_ context.Context, name string) (application.ApplyResult, error) {
+	path, err := a.path()
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	backupPath, ok := safefile.ResolveBackup(path, backupMarker, name)
+	if !ok {
+		return application.ApplyResult{}, safefile.ErrInvalidBackupName
+	}
+	raw, err := os.ReadFile(backupPath)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
+	currentBackup, err := createBundleBackup(path, catalogPath)
+	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	var bundle backupBundle
+	if json.Unmarshal(raw, &bundle) == nil && bundle.Format == backupBundleFormat {
+		if err = restoreSnapshot(catalogPath, bundle.Catalog); err != nil {
+			return application.ApplyResult{}, err
+		}
+		if err = restoreSnapshot(path, bundle.Config); err != nil {
+			return application.ApplyResult{}, err
+		}
+	} else {
+		if err = safefile.AtomicWrite(path, raw, 0600); err != nil {
+			return application.ApplyResult{}, err
+		}
+	}
+	_ = safefile.Prune(path, backupMarker, 10)
+	return application.ApplyResult{OK: true, Path: path, Backup: backupName(currentBackup)}, nil
+}

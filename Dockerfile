@@ -23,6 +23,6 @@ RUN apk add --no-cache ca-certificates tzdata && addgroup -S airoute && adduser 
 WORKDIR /data
 COPY --from=build /airoute /usr/local/bin/airoute
 USER airoute
-EXPOSE 8080 8081
+EXPOSE 12666 12667
 ENTRYPOINT ["airoute"]
 CMD ["serve", "--config", "/data/airoute.yaml"]

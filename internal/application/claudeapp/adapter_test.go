@@ -36,7 +36,7 @@ func TestApplyReadPreviewAndRollback(t *testing.T) {
 		t.Fatalf("unexpected detection: %#v err=%v", detection, err)
 	}
 	preview, err := adapter.Preview(context.Background(), desiredJSON(server.URL))
-	if err != nil || !strings.Contains(string(preview.Content), "visible-key") || strings.Contains(string(preview.Content), "••••••••") {
+	if err != nil || string(preview.Current) != "{}" || !strings.Contains(string(preview.Content), "visible-key") || strings.Contains(string(preview.Content), "••••••••") {
 		t.Fatalf("unexpected preview: %#v err=%v", preview, err)
 	}
 	result, err := adapter.Apply(context.Background(), desiredJSON(server.URL))
@@ -61,6 +61,13 @@ func TestApplyReadPreviewAndRollback(t *testing.T) {
 	state, err = adapter.Read(context.Background())
 	if err != nil || state.Exists {
 		t.Fatalf("expected original empty state after rollback: %#v err=%v", state, err)
+	}
+	backups, err = adapter.Backups(context.Background())
+	if err != nil || len(backups) < 1 {
+		t.Fatalf("expected rollback backups: %#v err=%v", backups, err)
+	}
+	if err = adapter.DeleteBackup(context.Background(), backups[0].Name); err != nil {
+		t.Fatal(err)
 	}
 }
 

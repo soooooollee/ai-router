@@ -22,7 +22,7 @@ test("switches the management console between Chinese and English", async ({ pag
   }
   await page.getByRole("button", { name: "Models" }).click();
   await page.getByRole("button", { name: "Delete" }).first().click();
-  await expect(page.locator(".confirm-dialog")).toContainText("If a route still uses this service");
+  await expect(page.locator(".confirm-dialog")).toContainText("routes left without targets will also be removed");
   await page.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Routes" }).click();
   await page.getByRole("button", { name: "Delete" }).first().click();

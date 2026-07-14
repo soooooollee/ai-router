@@ -131,7 +131,16 @@ export function SettingsPage({
         result.runtime_rebuilt?.length ? `已重建：${result.runtime_rebuilt.join("、")}` : "",
         result.restart_required?.length ? `重启后生效：${result.restart_required.join("、")}` : "",
       ].filter(Boolean);
-      setMessage(`${activeName.label}已保存并备份。${effects.join("；") || "没有运行字段变化"}`);
+      const hotReloaded = result.hot_reloaded || [];
+      if (sheet === "logging" && hotReloaded.length === 1 && hotReloaded[0] === "logging.capture_bodies") {
+        setMessage(
+          loggingDraft.capture_bodies
+            ? "聊天正文记录已开启，配置已保存并备份。后续新请求将记录请求和响应正文，已有日志不受影响。"
+            : "聊天正文记录已关闭，配置已保存并备份。后续新请求将不再记录请求和响应正文，已有日志不受影响。",
+        );
+      } else {
+        setMessage(`${activeName.label}已保存并备份。${effects.join("；") || "没有运行字段变化"}`);
+      }
       onSaved(nextYAML, result.hash);
     } catch (error) {
       setMessage((error as Error).message);
@@ -227,7 +236,7 @@ export function SettingsPage({
               </div>
               <div className="logging-basic-fields">
                 <label>日志级别<select aria-label="日志级别" value={loggingDraft.level || "info"} onChange={(event) => updateLogging("level", event.target.value)}><option value="debug">Debug</option><option value="info">Info</option><option value="warn">Warn</option><option value="error">Error</option></select></label>
-                <label>内存保留条数<input aria-label="内存保留条数" type="number" min={1} max={100000} value={loggingDraft.request_history || 500} onChange={(event) => updateLogging("request_history", Number(event.target.value))} /></label>
+                <label>内存保留条数<input aria-label="内存保留条数" type="number" min={1} max={100000} value={loggingDraft.request_history || 50} onChange={(event) => updateLogging("request_history", Number(event.target.value))} /></label>
               </div>
               <div className="logging-privacy-note"><b>本地数据说明</b><span>{loggingDraft.persist ? "日志会写入本机磁盘。" : "日志当前只保存在进程内存，重启后清空。"}聊天正文是否记录由上方开关控制。</span></div>
             </div>

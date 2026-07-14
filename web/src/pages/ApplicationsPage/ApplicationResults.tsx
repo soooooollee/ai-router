@@ -1,5 +1,5 @@
 import React from "react";
-import { Check, CircleAlert, RotateCcw } from "lucide-react";
+import { Check, CircleAlert, RotateCcw, Trash2 } from "lucide-react";
 import type { ApplicationBackup, ApplicationVerifyResult } from "../../types";
 import { currentLocale } from "../../app/i18n";
 
@@ -10,6 +10,7 @@ export function ApplicationResults({
   canRollback,
   backups,
   rollback,
+  deleteBackup,
 }: {
   verifyResult: ApplicationVerifyResult | null;
   busy: string;
@@ -17,6 +18,7 @@ export function ApplicationResults({
   canRollback: boolean;
   backups: ApplicationBackup[];
   rollback: (backup: ApplicationBackup) => void;
+  deleteBackup: (backup: ApplicationBackup) => void;
 }) {
   return (
     <>
@@ -62,10 +64,20 @@ export function ApplicationResults({
                   {backup.contains_sensitive_config ? " · 可能含本地密钥" : ""}
                 </span>
               </div>
-              <button disabled={Boolean(busy)} onClick={() => rollback(backup)}>
-                <RotateCcw size={14} />
-                {busy === backup.name ? "恢复中…" : "恢复"}
-              </button>
+              <div className="application-backup-actions">
+                <button disabled={Boolean(busy)} onClick={() => rollback(backup)}>
+                  <RotateCcw size={14} />
+                  {busy === backup.name ? "恢复中…" : "恢复"}
+                </button>
+                <button
+                  className="danger"
+                  disabled={Boolean(busy)}
+                  onClick={() => deleteBackup(backup)}
+                >
+                  <Trash2 size={14} />
+                  删除
+                </button>
+              </div>
             </div>
           ))}
           {!backups.length && <small>写入配置后会在这里显示备份。</small>}

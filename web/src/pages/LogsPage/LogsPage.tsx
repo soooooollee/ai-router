@@ -26,14 +26,31 @@ function contentText(content: any): string {
   }).filter(Boolean).join("\n\n");
 }
 
-function requestEntries(body: any): ChatEntry[] {
+export function requestEntries(body: any): ChatEntry[] {
   if (!body) return [];
   const entries: ChatEntry[] = [];
   if (body.system) entries.push({ role: "system", content: contentText(body.system) });
   if (body.instructions) entries.push({ role: "system", content: contentText(body.instructions) });
-  for (const message of body.messages || body.input || []) {
-    if (typeof message === "string") entries.push({ role: "user", content: message });
-    else entries.push({ role: message.role || "user", content: contentText(message.content ?? message.parts ?? message) });
+  const source = body.messages ?? body.input ?? [];
+  const messages = Array.isArray(source) ? source : [source];
+  for (const message of messages) {
+    if (typeof message === "string") {
+      entries.push({ role: "user", content: message });
+      continue;
+    }
+    if (message?.type === "function_call") {
+      entries.push({ role: "assistant", content: `[工具调用 ${message.name || ""}]\n${message.arguments || "{}"}` });
+      continue;
+    }
+    if (message?.type === "function_call_output") {
+      entries.push({ role: "tool", content: `[工具结果]\n${contentText(message.output)}` });
+      continue;
+    }
+    if (message?.type === "reasoning") {
+      entries.push({ role: "assistant", content: `[思考]\n${contentText(message.summary)}` });
+      continue;
+    }
+    entries.push({ role: message?.role || "user", content: contentText(message?.content ?? message?.parts ?? message) });
   }
   if (!entries.length && body.contents) {
     for (const message of body.contents) entries.push({ role: message.role || "user", content: contentText(message.parts) });
@@ -41,7 +58,7 @@ function requestEntries(body: any): ChatEntry[] {
   return entries.filter((entry) => entry.content);
 }
 
-function responseEntries(body: any): ChatEntry[] {
+export function responseEntries(body: any): ChatEntry[] {
   if (!body) return [];
   if (Array.isArray(body.events)) {
     let text = "", reasoning = "";
@@ -56,6 +73,15 @@ function responseEntries(body: any): ChatEntry[] {
     return combined ? [{ role: "assistant", content: combined }] : [];
   }
   if (body.choices?.[0]?.message) return [{ role: "assistant", content: contentText(body.choices[0].message.content) }];
+  if (Array.isArray(body.output)) {
+    const content = body.output.map((item: any) => {
+      if (item?.type === "reasoning") return `[思考]\n${contentText(item.summary)}`;
+      if (item?.type === "message") return contentText(item.content);
+      if (item?.type === "function_call") return `[工具调用 ${item.name || ""}]\n${item.arguments || "{}"}`;
+      return "";
+    }).filter(Boolean).join("\n\n");
+    return content ? [{ role: "assistant", content }] : [];
+  }
   if (body.content) return [{ role: body.role || "assistant", content: contentText(body.content) }];
   if (body.messages) return body.messages.map((message: any) => ({ role: message.role || "assistant", content: contentText(message.content) }));
   const parts = body.candidates?.[0]?.content?.parts;

@@ -35,7 +35,7 @@ func TestApplyPreviewBackupAndRollback(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !bytes.Contains(preview.Content, []byte("keep-me")) || !strings.Contains(preview.Diff, "ANTHROPIC_MODEL") {
+	if !bytes.Contains(preview.Current, []byte("keep-me")) || !bytes.Contains(preview.Content, []byte("keep-me")) || !strings.Contains(preview.Diff, "ANTHROPIC_MODEL") {
 		t.Fatalf("unexpected preview: %s\n%s", preview.Content, preview.Diff)
 	}
 	unchanged, err := os.ReadFile(path)
@@ -56,6 +56,18 @@ func TestApplyPreviewBackupAndRollback(t *testing.T) {
 	backups, err := a.Backups(context.Background())
 	if err != nil || len(backups) != 2 {
 		t.Fatalf("backups=%v err=%v", backups, err)
+	}
+	for _, backup := range backups {
+		if backup.Name != first.Backup {
+			if err = a.DeleteBackup(context.Background(), backup.Name); err != nil {
+				t.Fatal(err)
+			}
+			break
+		}
+	}
+	backups, err = a.Backups(context.Background())
+	if err != nil || len(backups) != 1 {
+		t.Fatalf("backup delete failed: backups=%v err=%v", backups, err)
 	}
 	if _, err = a.Rollback(context.Background(), first.Backup); err != nil {
 		t.Fatal(err)

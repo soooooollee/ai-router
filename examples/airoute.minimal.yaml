@@ -1,8 +1,8 @@
 version: 1
 
 server:
-  listen: 127.0.0.1:8080
-  admin_listen: 127.0.0.1:8081
+  listen: 127.0.0.1:12666
+  admin_listen: 127.0.0.1:12667
   max_concurrent: 256
   max_headers: 100
   max_header_bytes: 1048576
@@ -13,25 +13,15 @@ admin:
 auth:
   enabled: false
 
-providers:
-  - id: openai
-    name: OpenAI
-    protocol: openai-responses
-    base_url: https://api.openai.com/v1
-    api_key: sk-your-api-key
-    models: [gpt-5-mini]
-
-default_route:
-  targets:
-    - provider: openai
-      model: gpt-5-mini
+providers: []
+routes: []
 
 conversion:
   unsupported_fields: warn
 
 logging:
   level: info
-  request_history: 500
+  request_history: 50
 
 metrics:
   enabled: true

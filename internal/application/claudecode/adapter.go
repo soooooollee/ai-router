@@ -263,8 +263,13 @@ func (a *Adapter) Preview(_ context.Context, raw json.RawMessage) (application.P
 	if err != nil {
 		return application.Preview{}, err
 	}
+	current := composed.previous
+	if len(bytes.TrimSpace(current)) == 0 {
+		current = []byte("{}")
+	}
 	return application.Preview{
 		Path:             composed.path,
+		Current:          json.RawMessage(current),
 		Content:          json.RawMessage(composed.next),
 		Diff:             lineDiff(composed.previous, composed.next),
 		PreservedFields:  composed.preserved,
@@ -513,6 +518,14 @@ func (a *Adapter) Backups(_ context.Context) ([]application.Backup, error) {
 		out = append(out, application.Backup{Name: entry.Name, Path: entry.Path, Size: entry.Size, ModifiedAt: entry.ModifiedAt, ContainsSensitive: true})
 	}
 	return out, nil
+}
+
+func (a *Adapter) DeleteBackup(_ context.Context, name string) error {
+	path, err := a.path()
+	if err != nil {
+		return err
+	}
+	return safefile.RemoveBackup(path, ".airoute.bak.", name)
 }
 
 func (a *Adapter) Rollback(_ context.Context, name string) (application.ApplyResult, error) {

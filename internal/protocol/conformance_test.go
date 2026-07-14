@@ -381,6 +381,42 @@ func TestResponsesStreamSequenceAndDetailedUsage(t *testing.T) {
 	}
 }
 
+func TestResponsesStreamEmitsCodexItemLifecycle(t *testing.T) {
+	a := openairesponses.New()
+	events := []ir.Event{
+		{Type: "content.start", Sequence: 1, ResponseID: "r", Index: 0, Block: &ir.ContentBlock{Type: "reasoning"}},
+		{Type: "reasoning.delta", Sequence: 2, ResponseID: "r", Index: 0, Delta: "think"},
+		{Type: "content.end", Sequence: 3, ResponseID: "r", Index: 0, Block: &ir.ContentBlock{Type: "reasoning", Text: "think"}},
+		{Type: "content.start", Sequence: 4, ResponseID: "r", Index: 1, Block: &ir.ContentBlock{Type: "text"}},
+		{Type: "text.delta", Sequence: 5, ResponseID: "r", Index: 1, Delta: "OK"},
+		{Type: "content.end", Sequence: 6, ResponseID: "r", Index: 1, Block: &ir.ContentBlock{Type: "text", Text: "OK"}},
+	}
+	var names []string
+	for _, event := range events {
+		chunks, _, err := a.EncodeStreamEvent(context.Background(), event)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, chunk := range chunks {
+			names = append(names, chunk.Event)
+		}
+	}
+	want := []string{
+		"response.output_item.added", "response.reasoning_summary_part.added", "response.reasoning_summary_text.delta",
+		"response.reasoning_summary_text.done", "response.reasoning_summary_part.done", "response.output_item.done",
+		"response.output_item.added", "response.content_part.added", "response.output_text.delta",
+		"response.output_text.done", "response.content_part.done", "response.output_item.done",
+	}
+	if len(names) != len(want) {
+		t.Fatalf("events=%#v", names)
+	}
+	for i := range want {
+		if names[i] != want[i] {
+			t.Fatalf("event %d want=%s got=%s; all=%#v", i, want[i], names[i], names)
+		}
+	}
+}
+
 func TestDocumentRefusalAndSourceProtocolCoverage(t *testing.T) {
 	r := adapters()
 	for source, raw := range requestSamples() {

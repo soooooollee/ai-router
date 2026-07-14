@@ -3,6 +3,7 @@ package safefile
 import (
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"strings"
 	"time"
 )
+
+var ErrInvalidBackupName = errors.New("invalid managed backup name")
 
 // Entry describes a backup managed by AI Router.
 type Entry struct {
@@ -35,8 +38,15 @@ func Backup(path, marker string) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	return BackupData(path, marker, raw)
+}
+
+// BackupData writes an explicit snapshot using the same naming and permission
+// rules as Backup. It is useful when one visible backup represents multiple
+// related files.
+func BackupData(path, marker string, raw []byte) (string, error) {
 	name := path + marker + time.Now().UTC().Format("20060102T150405.000000000Z") + "." + randomSuffix()
-	if err = AtomicWrite(name, raw, 0600); err != nil {
+	if err := AtomicWrite(name, raw, 0600); err != nil {
 		return "", err
 	}
 	return name, nil
@@ -122,4 +132,20 @@ func ResolveBackup(path, marker, name string) (string, bool) {
 		return "", false
 	}
 	return filepath.Join(filepath.Dir(path), name), true
+}
+
+// RemoveBackup deletes only a regular backup file managed for path.
+func RemoveBackup(path, marker, name string) error {
+	backupPath, ok := ResolveBackup(path, marker, name)
+	if !ok {
+		return ErrInvalidBackupName
+	}
+	info, err := os.Lstat(backupPath)
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return ErrInvalidBackupName
+	}
+	return os.Remove(backupPath)
 }

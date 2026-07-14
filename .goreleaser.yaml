@@ -17,7 +17,9 @@ archives:
     files:
       - LICENSE
       - README.md
+      - README_ZH.md
       - CHANGELOG.md
+      - install.sh
       - schemas/config.v1.schema.json
       - examples/airoute.minimal.yaml
       - examples/airoute.full.yaml

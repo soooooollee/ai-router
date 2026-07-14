@@ -362,7 +362,7 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	}
 
 	resp, body := request(http.MethodGet, "/api/apps", "")
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) {
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) || !bytes.Contains(body, []byte(`"id":"codex"`)) || !bytes.Contains(body, []byte(`"id":"mimo-code"`)) {
 		t.Fatalf("application list failed (%d): %s", resp.StatusCode, body)
 	}
 	resp, body = request(http.MethodGet, "/api/apps/claude-code", "")
@@ -374,6 +374,12 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	resp, body = request(http.MethodPost, "/api/apps/claude-code/preview", payload)
 	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"will_create_backup":true`)) || !bytes.Contains(body, []byte(`"theme"`)) || !bytes.Contains(body, []byte("local-key")) {
 		t.Fatalf("application preview failed (%d): %s", resp.StatusCode, body)
+	}
+	var preview struct {
+		Current map[string]any `json:"current"`
+	}
+	if err := json.Unmarshal(body, &preview); err != nil || preview.Current["theme"] != "dark" {
+		t.Fatalf("application preview omitted current config: %s (%v)", body, err)
 	}
 	resp, body = request(http.MethodPut, "/api/apps/claude-code/config", payload)
 	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ok":true`)) {
@@ -398,6 +404,15 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	if err != nil || !bytes.Contains(raw, []byte(`"theme":"dark"`)) || !bytes.Contains(raw, []byte("must-not-leak")) {
 		t.Fatalf("application rollback did not restore the original file: %s (%v)", raw, err)
 	}
+	deletePayload, _ := json.Marshal(map[string]string{"name": applied.Backup})
+	resp, body = request(http.MethodDelete, "/api/apps/claude-code/backups", string(deletePayload))
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ok":true`)) {
+		t.Fatalf("application backup delete failed (%d): %s", resp.StatusCode, body)
+	}
+	resp, body = request(http.MethodGet, "/api/apps/claude-code/backups", "")
+	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte(applied.Backup)) {
+		t.Fatalf("deleted application backup still listed (%d): %s", resp.StatusCode, body)
+	}
 
 	resp, body = request(http.MethodGet, "/api/apps/unknown", "")
 	if resp.StatusCode != http.StatusNotFound {
@@ -407,11 +422,19 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 
 func TestApplicationWebRedactionFollowsSettingAndPreservesKey(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".claude", "settings.json")
+	codexPath := filepath.Join(t.TempDir(), ".codex", "config.toml")
 	t.Setenv("AIROUTE_CLAUDE_SETTINGS_PATH", path)
+	t.Setenv("AIROUTE_CODEX_CONFIG_PATH", codexPath)
 	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(path, []byte(`{"theme":"dark","env":{"ANTHROPIC_API_KEY":"real-local-key","ANTHROPIC_MODEL":"old-model"}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(codexPath), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(codexPath, []byte("model = \"old-model\"\nmodel_provider = \"airoute\"\n\n[model_providers.airoute]\nbase_url = \"http://127.0.0.1:12666/v1\"\nexperimental_bearer_token = \"real-codex-key\"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	c := &config.Config{
@@ -460,6 +483,16 @@ func TestApplicationWebRedactionFollowsSettingAndPreservesKey(t *testing.T) {
 	}
 	if !bytes.Contains(written, []byte("real-local-key")) || !bytes.Contains(written, []byte("new-model")) || bytes.Contains(written, []byte(webRedactionMask)) {
 		t.Fatalf("masked application save did not preserve the real key: %s", written)
+	}
+
+	resp, body = request(http.MethodGet, "/api/apps/codex", "")
+	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte("real-codex-key")) || !bytes.Contains(body, []byte(webRedactionMask)) {
+		t.Fatalf("Codex state did not follow web redaction (%d): %s", resp.StatusCode, body)
+	}
+	codexPayload := `{"base_url":"http://127.0.0.1:12666","api_key":"••••••••","model":"new-model"}`
+	resp, body = request(http.MethodPost, "/api/apps/codex/preview", codexPayload)
+	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte("real-codex-key")) || !bytes.Contains(body, []byte(webRedactionMask)) || !bytes.Contains(body, []byte("experimental_bearer_token")) {
+		t.Fatalf("Codex TOML preview did not follow web redaction (%d): %s", resp.StatusCode, body)
 	}
 }
 

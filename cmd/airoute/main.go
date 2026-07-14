@@ -91,8 +91,8 @@ Usage:
   airoute models  --config airoute.yaml [--json]
   airoute routes  --config airoute.yaml [--json]
   airoute probe   --config airoute.yaml --provider ID [--json]
-  airoute status  [--url http://127.0.0.1:8081] [--token TOKEN]
-  airoute ui      [--url http://127.0.0.1:8081]
+  airoute status  [--url http://127.0.0.1:12667] [--token TOKEN]
+  airoute ui      [--url http://127.0.0.1:12667]
   airoute version
 `)
 }
@@ -454,7 +454,7 @@ func probe(args []string) error {
 }
 func status(args []string) error {
 	fs := flag.NewFlagSet("status", flag.ContinueOnError)
-	u := fs.String("url", "http://127.0.0.1:8081", "admin URL")
+	u := fs.String("url", "http://127.0.0.1:12667", "admin URL")
 	token := fs.String("token", os.Getenv("AIROUTE_ADMIN_TOKEN"), "admin token")
 	jsonMode := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(args); err != nil {
@@ -492,7 +492,7 @@ func status(args []string) error {
 }
 func ui(args []string) error {
 	fs := flag.NewFlagSet("ui", flag.ContinueOnError)
-	u := fs.String("url", "http://127.0.0.1:8081", "admin URL")
+	u := fs.String("url", "http://127.0.0.1:12667", "admin URL")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}

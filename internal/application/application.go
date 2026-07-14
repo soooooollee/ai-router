@@ -47,6 +47,7 @@ type State struct {
 
 type Preview struct {
 	Path             string          `json:"path"`
+	Current          json.RawMessage `json:"current"`
 	Content          json.RawMessage `json:"content"`
 	Diff             string          `json:"diff"`
 	PreservedFields  int             `json:"preserved_fields"`
@@ -95,6 +96,7 @@ type Adapter interface {
 	Apply(context.Context, json.RawMessage) (ApplyResult, error)
 	Verify(context.Context, VerifyOptions) (VerifyResult, error)
 	Backups(context.Context) ([]Backup, error)
+	DeleteBackup(context.Context, string) error
 	Rollback(context.Context, string) (ApplyResult, error)
 }
 

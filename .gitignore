@@ -3,6 +3,7 @@
 /claude-code-router/
 /web/node_modules/
 /web/dist/
+/npm/vendor/
 /web/test-results/
 /web/playwright-report/
 /web/*.tsbuildinfo
