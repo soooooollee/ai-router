@@ -37,6 +37,27 @@ default_route:
 	if c.Server.MaxBodySize != 32<<20 {
 		t.Fatalf("unexpected max body size %d", c.Server.MaxBodySize)
 	}
+	if c.Server.Listen != "127.0.0.1:12666" || c.Server.AdminListen != "127.0.0.1:12667" {
+		t.Fatalf("unexpected default listeners: gateway=%q admin=%q", c.Server.Listen, c.Server.AdminListen)
+	}
+	if c.Logging.RequestHistory != 50 {
+		t.Fatalf("unexpected default request history %d", c.Logging.RequestHistory)
+	}
+}
+
+func TestEmptyOnboardingConfigurationAllowed(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "version: 1\nproviders: []\nroutes: []\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers) != 0 || len(c.Routes) != 0 || c.DefaultRoute != nil {
+		t.Fatalf("unexpected onboarding configuration: %#v", c)
+	}
 }
 
 func TestUnknownFieldRejected(t *testing.T) {

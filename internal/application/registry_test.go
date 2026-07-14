@@ -24,7 +24,8 @@ func (testAdapter) Apply(context.Context, json.RawMessage) (ApplyResult, error) 
 func (testAdapter) Verify(context.Context, VerifyOptions) (VerifyResult, error) {
 	return VerifyResult{}, nil
 }
-func (testAdapter) Backups(context.Context) ([]Backup, error) { return nil, nil }
+func (testAdapter) Backups(context.Context) ([]Backup, error)  { return nil, nil }
+func (testAdapter) DeleteBackup(context.Context, string) error { return nil }
 func (testAdapter) Rollback(context.Context, string) (ApplyResult, error) {
 	return ApplyResult{}, nil
 }

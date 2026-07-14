@@ -56,7 +56,7 @@ type Store struct {
 
 func NewStore(capacity int) *Store {
 	if capacity < 1 {
-		capacity = 500
+		capacity = 50
 	}
 	return &Store{records: make([]Record, capacity), cap: capacity}
 }
@@ -73,7 +73,7 @@ func (s *Store) Add(r Record) {
 func (s *Store) SetFile(path string) { s.mu.Lock(); defer s.mu.Unlock(); s.file = path }
 func (s *Store) Configure(capacity int, file string) {
 	if capacity < 1 {
-		capacity = 500
+		capacity = 50
 	}
 	s.mu.Lock()
 	defer s.mu.Unlock()

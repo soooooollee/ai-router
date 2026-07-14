@@ -27,3 +27,34 @@ func TestStreamNormalizerSynthesizesLegalLifecycle(t *testing.T) {
 		}
 	}
 }
+
+func TestStreamNormalizerSeparatesReasoningAndTextSharingSourceIndex(t *testing.T) {
+	n := NewStreamNormalizer()
+	input := []Event{
+		{Type: "reasoning.delta", ResponseID: "r", Delta: "think", Index: 0},
+		{Type: "text.delta", ResponseID: "r", Delta: "answer", Index: 0},
+		{Type: "response.end", ResponseID: "r"},
+	}
+	var events []Event
+	for _, event := range input {
+		events = append(events, n.Push(event)...)
+	}
+	var reasoningIndex, textIndex = -1, -1
+	var ended = map[int]*ContentBlock{}
+	for _, event := range events {
+		switch event.Type {
+		case "reasoning.delta":
+			reasoningIndex = event.Index
+		case "text.delta":
+			textIndex = event.Index
+		case "content.end":
+			ended[event.Index] = event.Block
+		}
+	}
+	if reasoningIndex < 0 || textIndex < 0 || reasoningIndex == textIndex {
+		t.Fatalf("reasoning=%d text=%d events=%#v", reasoningIndex, textIndex, events)
+	}
+	if ended[reasoningIndex] == nil || ended[reasoningIndex].Text != "think" || ended[textIndex] == nil || ended[textIndex].Text != "answer" {
+		t.Fatalf("completed blocks lost content: %#v", ended)
+	}
+}

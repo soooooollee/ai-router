@@ -346,7 +346,11 @@ func (a *Adapter) Preview(_ context.Context, raw json.RawMessage) (application.P
 	if err != nil {
 		return application.Preview{}, err
 	}
-	return application.Preview{Path: c.library, Content: c.libraryNext, Diff: "将更新 Claude-3p 部署模式、配置库索引和 AI Router 网关配置。", WillCreateBackup: c.previous.Root.Exists || c.previous.Meta.Exists || c.previous.Library.Exists}, nil
+	current := []byte(c.previous.Library.Content)
+	if len(bytes.TrimSpace(current)) == 0 {
+		current = []byte("{}")
+	}
+	return application.Preview{Path: c.library, Current: json.RawMessage(current), Content: c.libraryNext, Diff: "将更新 Claude-3p 部署模式、配置库索引和 AI Router 网关配置。", WillCreateBackup: c.previous.Root.Exists || c.previous.Meta.Exists || c.previous.Library.Exists}, nil
 }
 
 func writeSnapshot(path string, snapshot fileSnapshot) error {
@@ -460,6 +464,14 @@ func (a *Adapter) Backups(context.Context) ([]application.Backup, error) {
 		out = append(out, application.Backup{Name: entry.Name, Path: entry.Path, Size: entry.Size, ModifiedAt: entry.ModifiedAt, ContainsSensitive: true})
 	}
 	return out, nil
+}
+
+func (a *Adapter) DeleteBackup(_ context.Context, name string) error {
+	_, _, _, state, err := a.paths()
+	if err != nil {
+		return err
+	}
+	return safefile.RemoveBackup(state, ".airoute.bak.", name)
 }
 
 func (a *Adapter) Rollback(_ context.Context, name string) (application.ApplyResult, error) {

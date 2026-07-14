@@ -11,7 +11,7 @@ import {
 import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
-import { protocolName } from "../../lib";
+import { protocolName, removeProviderReferences } from "../../lib";
 import { ProviderDialog } from "./ProviderDialog";
 import type { Provider } from "../../types";
 
@@ -77,9 +77,7 @@ export function ProvidersPage({
     setDeleting(true);
     try {
       const doc = parse(yaml) || {};
-      doc.providers = (doc.providers || []).filter(
-        (provider: any) => provider.id !== pendingDelete.id,
-      );
+      removeProviderReferences(doc, pendingDelete.id);
       const next = stringify(doc);
       const r = await api("/api/config", {
         method: "PUT",
@@ -105,7 +103,6 @@ export function ProvidersPage({
       render: (_, provider) => (
         <div className="provider-identity table-provider-identity">
           <h3>{provider.name || provider.id}</h3>
-          <span>{provider.id}</span>
         </div>
       ),
     },
@@ -223,7 +220,7 @@ export function ProvidersPage({
       <ConfirmDialog
         open={Boolean(pendingDelete)}
         title="删除模型服务？"
-        description={<>将删除 <b>{pendingDelete?.name || pendingDelete?.id}</b>。如果路由仍在使用该服务，需要先删除或修改对应路由。</>}
+        description={<>将删除 <b>{pendingDelete?.name || pendingDelete?.id}</b>，并清理引用它的路由目标；失去全部目标的路由会一并删除。</>}
         confirmLabel="删除模型服务"
         danger
         busy={deleting}

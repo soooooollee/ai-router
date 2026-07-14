@@ -22,6 +22,9 @@ test("settings validates JSON and explains sensitive configuration", async ({
   await expect(page.getByLabel("网页脱敏")).toHaveCount(0);
   await expect(page.getByLabel("记录聊天正文")).toBeChecked();
   await expect(page.getByText(/日志当前只保存在进程内存/)).toBeVisible();
+  await page.getByLabel("记录聊天正文").uncheck();
+  await page.getByRole("button", { name: "保存配置" }).click();
+  await expect(page.getByText(/聊天正文记录已关闭.*后续新请求将不再记录/)).toBeVisible();
   await page.getByRole("tab", { name: "网页脱敏" }).click();
   await expect(page.getByText(/只影响网页展示/)).toBeVisible();
   await page.getByLabel("网页脱敏").check();

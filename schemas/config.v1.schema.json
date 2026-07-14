@@ -10,8 +10,8 @@
     "server": {
       "type": "object", "additionalProperties": false,
       "properties": {
-        "listen": { "type": "string", "default": "127.0.0.1:8080" },
-        "admin_listen": { "type": "string", "default": "127.0.0.1:8081" },
+        "listen": { "type": "string", "default": "127.0.0.1:12666" },
+        "admin_listen": { "type": "string", "default": "127.0.0.1:12667" },
         "read_header_timeout": { "$ref": "#/$defs/duration" },
         "request_timeout": { "$ref": "#/$defs/duration" },
         "max_body_size": { "oneOf": [{"type":"integer","minimum":1},{"type":"string","pattern":"^[0-9]+(B|KiB|MiB|GiB)$"}] },
@@ -28,7 +28,7 @@
     "conversion": { "type":"object", "additionalProperties":false, "properties":{"unsupported_fields":{"enum":["strict","warn","drop"]},"preserve_extensions":{"type":"boolean"},"remote_image_policy":{"enum":["pass-through","reject"]}} },
     "retry": { "type":"object", "additionalProperties":false, "properties":{"max_attempts":{"type":"integer","minimum":1,"maximum":10},"base_delay":{"$ref":"#/$defs/duration"},"max_delay":{"$ref":"#/$defs/duration"},"on_status":{"type":"array","items":{"type":"integer","minimum":400,"maximum":599}}} },
     "fallback": { "type":"object", "additionalProperties":false, "properties":{"on_network_error":{"type":"boolean"},"on_timeout":{"type":"boolean"},"on_status":{"type":"array","items":{"type":"integer","minimum":400,"maximum":599}},"on_error_codes":{"type":"array","items":{"type":"string","minLength":1}}} },
-    "logging": { "type":"object", "additionalProperties":false, "properties":{"level":{"enum":["debug","info","warn","error"]},"format":{"enum":["json","text"]},"request_history":{"type":"integer","minimum":1,"maximum":100000},"capture_bodies":{"type":"boolean"},"persist":{"type":"boolean"},"web_redaction":{"type":"boolean"},"file":{"type":"string"}} },
+    "logging": { "type":"object", "additionalProperties":false, "properties":{"level":{"enum":["debug","info","warn","error"]},"format":{"enum":["json","text"]},"request_history":{"type":"integer","minimum":1,"maximum":100000,"default":50},"capture_bodies":{"type":"boolean"},"persist":{"type":"boolean"},"web_redaction":{"type":"boolean"},"file":{"type":"string"}} },
     "metrics": { "type":"object", "additionalProperties":false, "properties":{"enabled":{"type":"boolean"},"path":{"type":"string","pattern":"^/"},"model_labels":{"type":"boolean"}} }
   },
   "anyOf": [{"required":["routes"]},{"required":["default_route"]}],

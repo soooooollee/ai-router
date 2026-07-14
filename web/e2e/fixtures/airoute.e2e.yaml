@@ -20,7 +20,7 @@ providers:
     protocol: openai-chat
     base_url: http://127.0.0.1:19090/v1
     api_key: ${E2E_PROVIDER_KEY}
-    models: [mock-model]
+    models: [mock-model, secondary-upstream]
     allow_private_url: true
 
 routes:
@@ -28,6 +28,30 @@ routes:
     priority: 100
     match:
       model: fast
+    targets:
+      - provider: mock
+        model: mock-model
+  - id: mimo-anthropic
+    priority: 100
+    match:
+      model: mimo-v2.5
+      protocol: anthropic-messages
+    targets:
+      - provider: mock
+        model: mock-model
+  - id: mimo-chat
+    priority: 100
+    match:
+      model: mimo-v2.5
+      protocol: openai-chat
+    targets:
+      - provider: mock
+        model: mock-model
+  - id: mimo-responses
+    priority: 100
+    match:
+      model: mimo-v2.5
+      protocol: openai-responses
     targets:
       - provider: mock
         model: mock-model
@@ -42,7 +66,7 @@ conversion:
 
 logging:
   level: info
-  request_history: 500
+  request_history: 50
   capture_bodies: true
   persist: false
   web_redaction: false

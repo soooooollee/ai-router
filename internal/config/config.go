@@ -365,10 +365,10 @@ func (c *Config) prepare() error {
 		return fmt.Errorf("unsupported config version %d", c.Version)
 	}
 	if c.Server.Listen == "" {
-		c.Server.Listen = "127.0.0.1:8080"
+		c.Server.Listen = "127.0.0.1:12666"
 	}
 	if c.Server.AdminListen == "" {
-		c.Server.AdminListen = "127.0.0.1:8081"
+		c.Server.AdminListen = "127.0.0.1:12667"
 	}
 	if c.Server.MaxConcurrent == 0 {
 		c.Server.MaxConcurrent = 256
@@ -431,7 +431,7 @@ func (c *Config) prepare() error {
 		c.Logging.Format = "json"
 	}
 	if c.Logging.RequestHistory == 0 {
-		c.Logging.RequestHistory = 500
+		c.Logging.RequestHistory = 50
 	}
 	if c.Metrics.Path == "" {
 		c.Metrics.Path = "/metrics"
@@ -555,9 +555,6 @@ func (c *Config) Validate() error {
 	}
 	if c.DefaultRoute != nil {
 		validateTargets("default_route", c.DefaultRoute.Targets)
-	}
-	if len(c.Routes) == 0 && c.DefaultRoute == nil {
-		errs = append(errs, errors.New("at least one route or default_route is required"))
 	}
 	return errors.Join(errs...)
 }

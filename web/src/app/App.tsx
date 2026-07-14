@@ -212,7 +212,7 @@ export function App() {
             <RoutesPage
               data={config?.routes || []}
               providers={config?.providers || []}
-              gateway={status?.gateway_url || "http://127.0.0.1:8080"}
+              gateway={status?.gateway_url || "http://127.0.0.1:12666"}
               yaml={yaml}
               hash={hash}
               changed={(y, h) => {

@@ -8,6 +8,16 @@ import (
 	"time"
 )
 
+func TestStoreDefaultsToFiftyEntries(t *testing.T) {
+	s := NewStore(0)
+	for i := 0; i < 60; i++ {
+		s.Add(Record{ID: string(rune('A' + i))})
+	}
+	if records := s.List(100); len(records) != 50 {
+		t.Fatalf("default capacity=%d", len(records))
+	}
+}
+
 func TestBoundedStoreAndJSONL(t *testing.T) {
 	s := NewStore(2)
 	file := filepath.Join(t.TempDir(), "logs", "requests.jsonl")

@@ -3,6 +3,7 @@ package openairesponses
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 
 	"github.com/zbss/airoute/internal/protocol"
 	"github.com/zbss/airoute/internal/protocol/common"
@@ -228,7 +229,7 @@ func (*Adapter) EncodeResponse(_ context.Context, r *ir.Response) (json.RawMessa
 		}
 	}
 	if len(text) > 0 {
-		output = append([]any{map[string]any{"type": "message", "id": "msg_" + r.ID, "status": "completed", "role": "assistant", "content": text}}, output...)
+		output = append(output, map[string]any{"type": "message", "id": "msg_" + r.ID, "status": "completed", "role": "assistant", "content": text})
 	}
 	usage := map[string]any{"input_tokens": r.Usage.InputTokens, "output_tokens": r.Usage.OutputTokens, "total_tokens": r.Usage.TotalTokens}
 	if r.Usage.CachedTokens > 0 {
@@ -278,29 +279,80 @@ func (*Adapter) DecodeStreamEvent(_ context.Context, event string, raw json.RawM
 }
 
 func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE, []ir.Diagnostic, error) {
-	var event string
-	var v map[string]any
+	itemID := func(prefix string) string {
+		return fmt.Sprintf("%s_%s_%d", prefix, e.ResponseID, e.Index)
+	}
+	chunk := func(event string, v map[string]any) protocol.SSE {
+		v["type"] = event
+		v["sequence_number"] = e.Sequence
+		return protocol.SSE{Event: event, Data: common.Raw(v)}
+	}
+	var chunks []protocol.SSE
 	switch e.Type {
 	case "response.start":
-		event = "response.created"
-		v = map[string]any{"type": event, "sequence_number": e.Sequence, "response": map[string]any{"id": e.ResponseID, "object": "response", "status": "in_progress", "model": e.Model, "output": []any{}}}
+		chunks = append(chunks, chunk("response.created", map[string]any{"response": map[string]any{"id": e.ResponseID, "object": "response", "status": "in_progress", "model": e.Model, "output": []any{}}}))
+	case "content.start":
+		if e.Block == nil {
+			return nil, nil, nil
+		}
+		switch e.Block.Type {
+		case "text":
+			id := itemID("msg")
+			chunks = append(chunks,
+				chunk("response.output_item.added", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": map[string]any{"id": id, "type": "message", "status": "in_progress", "role": "assistant", "content": []any{}}}),
+				chunk("response.content_part.added", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "content_index": 0, "part": map[string]any{"type": "output_text", "text": "", "annotations": []any{}}}),
+			)
+		case "reasoning":
+			id := itemID("rs")
+			chunks = append(chunks,
+				chunk("response.output_item.added", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": map[string]any{"id": id, "type": "reasoning", "status": "in_progress", "summary": []any{}}}),
+				chunk("response.reasoning_summary_part.added", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "summary_index": 0, "part": map[string]any{"type": "summary_text", "text": ""}}),
+			)
+		}
 	case "text.delta":
-		event = "response.output_text.delta"
-		v = map[string]any{"type": event, "sequence_number": e.Sequence, "response_id": e.ResponseID, "output_index": e.Index, "content_index": 0, "delta": e.Delta}
+		chunks = append(chunks, chunk("response.output_text.delta", map[string]any{"response_id": e.ResponseID, "item_id": itemID("msg"), "output_index": e.Index, "content_index": 0, "delta": e.Delta}))
 	case "reasoning.delta":
-		event = "response.reasoning_summary_text.delta"
-		v = map[string]any{"type": event, "sequence_number": e.Sequence, "response_id": e.ResponseID, "output_index": e.Index, "summary_index": 0, "delta": e.Delta}
+		chunks = append(chunks, chunk("response.reasoning_summary_text.delta", map[string]any{"response_id": e.ResponseID, "item_id": itemID("rs"), "output_index": e.Index, "summary_index": 0, "delta": e.Delta}))
 	case "tool_call.start":
 		if e.Block == nil {
 			return nil, nil, nil
 		}
-		event = "response.output_item.added"
-		v = map[string]any{"type": event, "sequence_number": e.Sequence, "response_id": e.ResponseID, "output_index": e.Index, "item": map[string]any{"type": "function_call", "call_id": e.Block.ID, "name": e.Block.Name, "arguments": ""}}
+		chunks = append(chunks, chunk("response.output_item.added", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": map[string]any{"id": itemID("fc"), "type": "function_call", "status": "in_progress", "call_id": e.Block.ID, "name": e.Block.Name, "arguments": ""}}))
 	case "tool_call.arguments.delta":
-		event = "response.function_call_arguments.delta"
-		v = map[string]any{"type": event, "sequence_number": e.Sequence, "response_id": e.ResponseID, "output_index": e.Index, "delta": e.Arguments}
+		chunks = append(chunks, chunk("response.function_call_arguments.delta", map[string]any{"response_id": e.ResponseID, "item_id": itemID("fc"), "output_index": e.Index, "delta": e.Arguments}))
+	case "content.end":
+		if e.Block == nil {
+			return nil, nil, nil
+		}
+		switch e.Block.Type {
+		case "text":
+			id := itemID("msg")
+			part := map[string]any{"type": "output_text", "text": e.Block.Text, "annotations": []any{}}
+			item := map[string]any{"id": id, "type": "message", "status": "completed", "role": "assistant", "content": []any{part}}
+			chunks = append(chunks,
+				chunk("response.output_text.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "content_index": 0, "text": e.Block.Text}),
+				chunk("response.content_part.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "content_index": 0, "part": part}),
+				chunk("response.output_item.done", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}),
+			)
+		case "reasoning":
+			id := itemID("rs")
+			part := map[string]any{"type": "summary_text", "text": e.Block.Text}
+			item := map[string]any{"id": id, "type": "reasoning", "status": "completed", "summary": []any{part}}
+			chunks = append(chunks,
+				chunk("response.reasoning_summary_text.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "summary_index": 0, "text": e.Block.Text}),
+				chunk("response.reasoning_summary_part.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "summary_index": 0, "part": part}),
+				chunk("response.output_item.done", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}),
+			)
+		case "tool_call":
+			id := itemID("fc")
+			arguments := string(e.Block.Arguments)
+			item := map[string]any{"id": id, "type": "function_call", "status": "completed", "call_id": e.Block.ID, "name": e.Block.Name, "arguments": arguments}
+			chunks = append(chunks,
+				chunk("response.function_call_arguments.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "name": e.Block.Name, "arguments": arguments}),
+				chunk("response.output_item.done", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}),
+			)
+		}
 	case "response.end":
-		event = "response.completed"
 		response := map[string]any{"id": e.ResponseID, "object": "response", "status": "completed", "model": e.Model, "output": []any{}}
 		if e.Usage != nil {
 			usage := map[string]any{"input_tokens": e.Usage.InputTokens, "output_tokens": e.Usage.OutputTokens, "total_tokens": e.Usage.TotalTokens}
@@ -312,14 +364,13 @@ func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE
 			}
 			response["usage"] = usage
 		}
-		v = map[string]any{"type": event, "sequence_number": e.Sequence, "response": response}
+		chunks = append(chunks, chunk("response.completed", map[string]any{"response": response}))
 	case "error":
-		event = "error"
-		v = map[string]any{"type": event, "error": e.Error}
+		chunks = append(chunks, chunk("error", map[string]any{"error": e.Error}))
 	default:
 		return nil, nil, nil
 	}
-	return []protocol.SSE{{Event: event, Data: common.Raw(v)}}, nil, nil
+	return chunks, nil, nil
 }
 
 func first(v ...string) string {

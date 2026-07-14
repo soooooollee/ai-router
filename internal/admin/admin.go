@@ -23,6 +23,8 @@ import (
 	"github.com/zbss/airoute/internal/application"
 	"github.com/zbss/airoute/internal/application/claudeapp"
 	"github.com/zbss/airoute/internal/application/claudecode"
+	"github.com/zbss/airoute/internal/application/codex"
+	"github.com/zbss/airoute/internal/application/mimocode"
 	"github.com/zbss/airoute/internal/auth"
 	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/observe"
@@ -65,7 +67,7 @@ type Server struct {
 
 func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Metrics, version, gatewayURL string) *Server {
 	restrictedTransport := &http.Transport{Proxy: nil, DialContext: secure.PublicDialContext, ResponseHeaderTimeout: 30 * time.Second}
-	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
+	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codex.New(), mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
 }
 func (s *Server) CloseIdleConnections() {
 	s.Client.CloseIdleConnections()
@@ -327,16 +329,43 @@ func restoreApplicationMaskedKey(ctx context.Context, adapter application.Adapte
 
 func redactApplicationPreview(ctx context.Context, adapter application.Adapter, preview *application.Preview) {
 	values := map[string]struct{}{}
-	var content any
-	if json.Unmarshal(preview.Content, &content) == nil {
-		collectSensitiveWebValues(content, "", values)
-		redactWebValue(content)
-		if redacted, err := json.Marshal(content); err == nil {
-			preview.Content = redacted
+	type textPreview struct {
+		target *json.RawMessage
+		value  string
+	}
+	textPreviews := make([]textPreview, 0, 2)
+	for _, target := range []*json.RawMessage{&preview.Current, &preview.Content} {
+		var content any
+		if json.Unmarshal(*target, &content) == nil {
+			if text, ok := content.(string); ok {
+				textPreviews = append(textPreviews, textPreview{target: target, value: text})
+				continue
+			}
+			collectSensitiveWebValues(content, "", values)
+			redactWebValue(content)
+			if redacted, err := json.Marshal(content); err == nil {
+				*target = redacted
+			}
 		}
 	}
 	if state, err := adapter.Read(ctx); err == nil {
 		collectSensitiveWebValues(state.Managed, "", values)
+	}
+	for _, item := range textPreviews {
+		lines := strings.Split(item.value, "\n")
+		for index, line := range lines {
+			position := strings.Index(line, "=")
+			if position >= 0 && sensitiveWebKey(strings.TrimSpace(line[:position])) {
+				lines[index] = line[:position+1] + " \"" + webRedactionMask + "\""
+			}
+		}
+		redacted := strings.Join(lines, "\n")
+		for value := range values {
+			redacted = strings.ReplaceAll(redacted, value, webRedactionMask)
+		}
+		if raw, err := json.Marshal(redacted); err == nil {
+			*item.target = raw
+		}
 	}
 	for value := range values {
 		preview.Diff = strings.ReplaceAll(preview.Diff, value, webRedactionMask)
@@ -884,6 +913,19 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		jsonOut(w, http.StatusOK, map[string]any{"backups": backups})
+	case action == "backups" && r.Method == http.MethodDelete:
+		var input struct {
+			Name string `json:"name"`
+		}
+		if json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&input) != nil || input.Name == "" {
+			jsonOut(w, http.StatusBadRequest, map[string]any{"error": "backup name is required"})
+			return
+		}
+		if deleteErr := adapter.DeleteBackup(r.Context(), input.Name); deleteErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, deleteErr)
+			return
+		}
+		jsonOut(w, http.StatusOK, map[string]any{"ok": true, "name": input.Name})
 	case action == "rollback" && r.Method == http.MethodPost:
 		var input struct {
 			Name string `json:"name"`

@@ -103,7 +103,8 @@ export type ApplicationState = {
 };
 export type ApplicationPreview = {
   path: string;
-  content: Record<string, unknown>;
+  current: Record<string, unknown> | string;
+  content: Record<string, unknown> | string;
   diff: string;
   preserved_fields: number;
   will_create_backup: boolean;

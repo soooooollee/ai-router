@@ -4,6 +4,7 @@ import { login } from "./helpers";
 test("provider detection and local API key display", async ({ page }) => {
   await login(page);
   await expect(page.getByText("e2e-provider-key", { exact: true })).toBeVisible();
+  await expect(page.locator(".table-provider-identity > span")).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "全部" })).toHaveCount(0);
   await page.getByRole("button", { name: /删\s*除/ }).first().click();
   await expect(page.getByRole("heading", { name: "删除模型服务？" })).toBeVisible();

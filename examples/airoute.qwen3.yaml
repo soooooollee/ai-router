@@ -13,7 +13,7 @@ logging:
     capture_bodies: true
     level: info
     persist: false
-    request_history: 500
+    request_history: 50
     web_redaction: false
 metrics:
     enabled: true
@@ -98,7 +98,7 @@ routes:
         - model: mimo-v2.5-pro
           provider: xiaomi-mimo-anthropic
 server:
-    admin_listen: 127.0.0.1:8081
-    listen: 127.0.0.1:8080
+    admin_listen: 127.0.0.1:12667
+    listen: 127.0.0.1:12666
     request_timeout: 10m
 version: 1

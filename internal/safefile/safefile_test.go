@@ -48,3 +48,23 @@ func TestResolveBackupRejectsTraversal(t *testing.T) {
 		t.Fatal("valid backup was rejected")
 	}
 }
+
+func TestRemoveBackupAcceptsOnlyManagedRegularFiles(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "settings.json")
+	if err := AtomicWrite(path, []byte("current"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	backup, err := Backup(path, ".airoute.bak.")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = RemoveBackup(path, ".airoute.bak.", filepath.Base(backup)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(backup); !os.IsNotExist(err) {
+		t.Fatalf("backup still exists: %v", err)
+	}
+	if err = RemoveBackup(path, ".airoute.bak.", "../settings.json"); err == nil {
+		t.Fatal("path traversal was accepted")
+	}
+}

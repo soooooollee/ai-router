@@ -1,0 +1,38 @@
+{
+  "name": "airoute-cli",
+  "version": "0.2.1",
+  "description": "Install the AI Router CLI for the current platform",
+  "license": "MIT",
+  "homepage": "https://github.com/soooooollee/ai-router#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/soooooollee/ai-router.git"
+  },
+  "bugs": {
+    "url": "https://github.com/soooooollee/ai-router/issues"
+  },
+  "keywords": [
+    "ai",
+    "router",
+    "openai",
+    "anthropic",
+    "gemini",
+    "proxy"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "bin": {
+    "airoute": "bin/airoute.js"
+  },
+  "files": [
+    "bin",
+    "lib",
+    "scripts",
+    "README.md"
+  ],
+  "scripts": {
+    "postinstall": "node scripts/install.js",
+    "test": "node --test test/*.test.js"
+  }
+}

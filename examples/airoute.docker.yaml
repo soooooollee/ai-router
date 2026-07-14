@@ -1,8 +1,8 @@
 version: 1
 
 server:
-  listen: 0.0.0.0:8080
-  admin_listen: 0.0.0.0:8081
+  listen: 0.0.0.0:12666
+  admin_listen: 0.0.0.0:12667
   max_concurrent: 256
 
 admin:
@@ -34,7 +34,7 @@ conversion:
 logging:
   level: info
   format: json
-  request_history: 500
+  request_history: 50
 
 metrics:
   enabled: true

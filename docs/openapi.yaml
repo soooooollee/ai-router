@@ -4,7 +4,7 @@ info:
   version: 1.0.0
   description: 管理控制面 API。模型网关端点保持各自供应商的原生 Schema。
 servers:
-  - url: http://127.0.0.1:8081
+  - url: http://127.0.0.1:12667
 security:
   - bearerAuth: []
 paths:

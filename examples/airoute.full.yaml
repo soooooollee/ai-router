@@ -1,8 +1,8 @@
 version: 1
 
 server:
-  listen: 0.0.0.0:8080
-  admin_listen: 127.0.0.1:8081
+  listen: 0.0.0.0:12666
+  admin_listen: 127.0.0.1:12667
   read_header_timeout: 10s
   request_timeout: 10m
   max_body_size: 32MiB
@@ -89,7 +89,7 @@ fallback:
 logging:
   level: info
   format: json
-  request_history: 500
+  request_history: 50
   capture_bodies: false
 
 metrics:
