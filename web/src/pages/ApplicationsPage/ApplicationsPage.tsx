@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { Check, Save, ShieldCheck, Trash2 } from "lucide-react";
+import { Check, Save, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
 import { api } from "../../app/api";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import {
@@ -23,7 +23,6 @@ const applicationOrder = [
   "claude-code",
   "claude-app",
   "codex",
-  "chatgpt-app",
   "mimo-code",
 ];
 
@@ -42,8 +41,8 @@ export function ApplicationsPage({
 	const [apps, setApps] = useState<ApplicationListItem[]>([]);
 	const [selectedID, setSelectedID] = useState("claude-code");
 	const routeOptions = useMemo(
-		() => applicationRouteOptions(config?.routes || [], selectedID),
-		[config?.routes, selectedID],
+		() => applicationRouteOptions(config?.routes || [], selectedID, config?.providers || []),
+		[config?.routes, config?.providers, selectedID],
 	);
 	const aliases = useMemo(
 		() => routeOptions.map((option) => option.alias),
@@ -68,10 +67,37 @@ export function ApplicationsPage({
     base_url: gateway,
     api_key: config?.auth?.enabled ? "" : "airoute-local",
     model: fallback,
+    integration_mode: "compatibility" as "direct" | "passthrough" | "compatibility",
     opus_model: fallback,
     sonnet_model: fallback,
     haiku_model: fallback,
   });
+  const selectedRouteOption = routeOptions.find(
+    (option) => option.alias === form.model,
+  );
+  const usesCodexCompatibilityFallback =
+    selectedID === "codex" &&
+    Boolean(selectedRouteOption) &&
+    form.integration_mode === "compatibility" &&
+    selectedRouteOption?.codex_compatibility !== "full";
+  const usesReasoningFallback =
+    usesCodexCompatibilityFallback &&
+    selectedRouteOption?.reasoning_with_tools === "disabled";
+  const requestConfig = useMemo(
+    () => ({
+      ...form,
+      models: aliases,
+      ...(selectedID === "codex" && selectedRouteOption
+        ? {
+            provider_id: selectedRouteOption.provider_id,
+            provider_name: selectedRouteOption.provider_name,
+            provider_base_url: selectedRouteOption.provider_base_url,
+            provider_model: selectedRouteOption.provider_model,
+          }
+        : {}),
+    }),
+    [aliases, form, selectedID, selectedRouteOption],
+  );
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
   const [confirmation, setConfirmation] = useState<
@@ -86,7 +112,6 @@ export function ApplicationsPage({
 	const supportsConfigForm = [
 		"claude-code",
 		"claude-app",
-		"chatgpt-app",
 		"codex",
 		"mimo-code",
 	].includes(selectedID);
@@ -137,6 +162,16 @@ export function ApplicationsPage({
         isClaudeApplication
           ? managed[isDesktop ? desktopKey : codeKey]
           : managed[desktopKey];
+      const managedModel = read("model", "ANTHROPIC_MODEL");
+      const selectedModel =
+        typeof managedModel === "string"
+          ? routeOptions.find(
+              (option) =>
+                option.alias === managedModel ||
+                (managed.integration_mode === "direct" &&
+                  option.provider_model === managedModel),
+            )?.alias || fallback
+          : fallback;
       setForm((current) => ({
         base_url: applicationGatewayURL(
           read("base_url", "ANTHROPIC_BASE_URL"),
@@ -147,13 +182,19 @@ export function ApplicationsPage({
           read("api_key", "ANTHROPIC_API_KEY")
             ? (read("api_key", "ANTHROPIC_API_KEY") as string)
             : current.api_key || (config?.auth?.enabled ? "" : "airoute-local"),
-        model: selected(read("model", "ANTHROPIC_MODEL")),
+        model: selectedModel,
+        integration_mode:
+          selectedID === "codex"
+            ? (routeOptions.find((option) => option.alias === selectedModel)?.integration_mode ||
+              (managed.integration_mode as typeof current.integration_mode) ||
+              "compatibility")
+            : current.integration_mode,
         opus_model: selected(read("opus_model", "ANTHROPIC_DEFAULT_OPUS_MODEL")),
         sonnet_model: selected(read("sonnet_model", "ANTHROPIC_DEFAULT_SONNET_MODEL")),
         haiku_model: selected(read("haiku_model", "ANTHROPIC_DEFAULT_HAIKU_MODEL")),
       }));
     }
-  }, [aliases, config?.auth?.enabled, fallback, gateway, isClaudeApplication, selectedID, supportsConfigForm]);
+  }, [aliases, config?.auth?.enabled, fallback, gateway, isClaudeApplication, routeOptions, selectedID, supportsConfigForm]);
 
   useEffect(() => {
     loadApplications().catch((error) => setMessage((error as Error).message));
@@ -182,7 +223,7 @@ export function ApplicationsPage({
       try {
         const value = (await api(`/api/apps/${selectedID}/preview`, {
           method: "POST",
-          body: JSON.stringify({ ...form, models: aliases }),
+          body: JSON.stringify(requestConfig),
           signal: controller.signal,
         })) as ApplicationPreview;
         if (!controller.signal.aborted) {
@@ -203,7 +244,7 @@ export function ApplicationsPage({
       window.clearTimeout(timer);
       controller.abort();
     };
-  }, [aliases, canPreview, form, selectedID, webRedaction]);
+  }, [aliases, canPreview, requestConfig, selectedID, webRedaction]);
 
   async function save() {
     setBusy("save");
@@ -211,14 +252,14 @@ export function ApplicationsPage({
     try {
       const nextPreview = (await api(`/api/apps/${selectedID}/preview`, {
         method: "POST",
-        body: JSON.stringify({ ...form, models: aliases }),
+        body: JSON.stringify(requestConfig),
       })) as ApplicationPreview;
       setPreviewResult(nextPreview);
       setEditedPreview(previewText(nextPreview.content));
       setPreviewDirty(false);
       const result = await api(`/api/apps/${selectedID}/config`, {
         method: "PUT",
-        body: JSON.stringify({ ...form, models: aliases }),
+        body: JSON.stringify(requestConfig),
       });
       setMessage(
         result.backup
@@ -241,7 +282,7 @@ export function ApplicationsPage({
         method: "PUT",
         body: JSON.stringify({
           content: editedPreview,
-          config: { ...form, models: aliases },
+          config: requestConfig,
         }),
       });
       setMessage(
@@ -284,7 +325,7 @@ export function ApplicationsPage({
     try {
       const result = (await api(`/api/apps/${selectedID}/verify`, {
         method: "POST",
-        body: JSON.stringify({ config: { ...form, models: aliases }, run_cli: runCLI }),
+        body: JSON.stringify({ config: requestConfig, run_cli: runCLI }),
       })) as ApplicationVerifyResult;
       setVerifyResult(result);
       setMessage(
@@ -350,12 +391,21 @@ export function ApplicationsPage({
         {label}
         <select
           value={value}
-          onChange={(event) => setForm({ ...form, [key]: event.target.value })}
+          onChange={(event) => {
+            const option = routeOptions.find((item) => item.alias === event.target.value);
+            setForm({
+              ...form,
+              [key]: event.target.value,
+              ...(selectedID === "codex" && key === "model"
+                ? { integration_mode: option?.integration_mode || "compatibility" }
+                : {}),
+            });
+          }}
         >
           <option value="">不设置</option>
 		  {routeOptions.map((option) => (
 			<option key={option.alias} value={option.alias}>
-			  {option.alias} → {option.protocol ? protocolName(option.protocol) : "所有兼容协议"}
+              {`${option.alias} → ${option.protocol ? protocolName(option.protocol) : "所有兼容协议"}`}
             </option>
           ))}
         </select>
@@ -443,10 +493,8 @@ export function ApplicationsPage({
                       <span>
 						{selectedID === "claude-app"
 							? "Claude App 通过本机第三方网关连接 AI Router"
-							: selectedID === "chatgpt-app"
-								? "ChatGPT App 中的 Codex 通过 Responses 协议连接 AI Router"
-								: selectedID === "codex"
-									? "Codex CLI 通过 Responses 协议连接 AI Router"
+							: selectedID === "codex"
+								? "Codex CLI 与 ChatGPT App 通过 Responses 协议连接 AI Router"
 								: selectedID === "mimo-code"
 									? "MiMo Code 通过 OpenAI 兼容协议连接 AI Router"
 									: "Claude Code 连接到本机 AI Router"}
@@ -455,6 +503,13 @@ export function ApplicationsPage({
                     <span>01</span>
                   </div>
                   <div className="application-connection-fields">
+                    {selectedID === "codex" && form.integration_mode === "direct" ? (
+                      <label>
+                        上游 Responses 地址
+                        <input value={selectedRouteOption?.provider_base_url || ""} readOnly />
+                      </label>
+                    ) : (
+                      <>
                     <label>
                       AI Router 地址
                       <input
@@ -475,6 +530,8 @@ export function ApplicationsPage({
                         }
                       />
                     </label>
+                      </>
+                    )}
                   </div>
                 </section>
 
@@ -500,6 +557,19 @@ export function ApplicationsPage({
 						</>
 					)}
                   </div>
+                  {usesCodexCompatibilityFallback && (
+                    <div className="application-compatibility-warning" role="alert">
+                      <TriangleAlert size={17} />
+                      <div>
+                        <b>正在使用 AI Router 兼容转换</b>
+                        <span>
+                          {usesReasoningFallback
+                            ? "Codex 使用 high 推理等级时通常会同时发送 tools（如 apply_patch、shell 等工具定义）和 reasoning_effort（用于指定模型推理强度）。如果上游 Chat 接口拒绝 tools + reasoning_effort，AI Router 会在工具请求中移除 reasoning_effort 并保留工具调用；普通对话和工具调用仍可正常使用。"
+                            : "Codex 仍使用 Responses；AI Router 会根据检测结果转换协议或修复 custom tools 与 reasoning 差异。能力边界以模型接入检测结果为准。"}
+                        </span>
+                      </div>
+                    </div>
+                  )}
                 </section>
 
                 <div className="application-save-bar">
@@ -508,10 +578,8 @@ export function ApplicationsPage({
 					<span>
 						{selectedID === "claude-app"
 							? "写入 Claude-3p 独立配置，保存后需重启 Claude App。"
-							: selectedID === "chatgpt-app"
-								? "与 Codex CLI、IDE 扩展共享 ~/.codex/config.toml；保存后请重启桌面端 Codex。"
-								: selectedID === "codex"
-									? "与 ChatGPT App、IDE 扩展共享 ~/.codex/config.toml；仅更新 AI Router provider。"
+							: selectedID === "codex"
+								? "Codex CLI、ChatGPT App 与 IDE 扩展共享 ~/.codex/config.toml；写入后请重启正在使用的客户端。"
 								: selectedID === "mimo-code"
 									? "仅更新 MiMo Code 的 AI Router provider，保留其他 Provider 和设置。"
 									: "写入前自动备份，不覆盖 Hooks、插件和权限配置。"}
@@ -682,7 +750,7 @@ export function ApplicationsPage({
             <>
               将删除 <b>{selectedApp?.manifest.name}</b> 中由 AI Router
               管理或可能产生冲突的旧配置。其他设置会保留，当前内容会先自动备份。
-              {(selectedID === "codex" || selectedID === "chatgpt-app") && (
+              {selectedID === "codex" && (
                 <> ChatGPT App 与 Codex CLI 共享此配置，清理会同时影响两者。</>
               )}
             </>

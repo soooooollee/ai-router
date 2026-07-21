@@ -12,8 +12,7 @@ test("application manifest, preview, apply and gateway verification", async ({
   await expect(page.locator(".horizontal-sheets button")).toHaveText([
     "Claude Code",
     "Claude App",
-    "Codex CLI",
-    "ChatGPT App",
+	"Codex CLI / ChatGPT App",
     "MiMo Code",
   ]);
   await expect(page.getByText("/tmp/airoute-claude-e2e.json")).toBeVisible();
@@ -56,10 +55,24 @@ test("application manifest, preview, apply and gateway verification", async ({
   await expect(
     backups.locator(".application-backup-row span").first(),
   ).toHaveCSS("font-size", "12px");
-  await expect(backups.getByRole("button", { name: "恢复" }).first()).toHaveCSS(
+  const restoreButton = backups.getByRole("button", { name: "恢复" }).first();
+  await expect(restoreButton).toHaveCSS(
     "font-size",
     "13px",
   );
+  await restoreButton.click();
+  const restoreDialog = page.locator(".confirm-dialog");
+  await expect(page.getByRole("heading", { name: "恢复应用配置备份？" })).toBeVisible();
+  await expect(restoreDialog.locator(".confirm-dialog-copy")).toHaveCSS(
+    "min-width",
+    "0px",
+  );
+  expect(
+    await restoreDialog.locator(".confirm-dialog-copy").evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
+  await restoreDialog.getByRole("button", { name: "取消" }).click();
   const currentTab = page.getByRole("tab", { name: "当前配置" });
   const mergedTab = page.getByRole("tab", { name: "合并后配置" });
   const currentTabBox = await currentTab.boundingBox();
@@ -76,15 +89,28 @@ test("application manifest, preview, apply and gateway verification", async ({
   );
   const editor = page.getByLabel("编辑合并后配置");
   const editedConfig = JSON.parse(await editor.inputValue());
-  editedConfig.manual_preview_field = true;
+  editedConfig.manual_preview_field = editedConfig.manual_preview_field !== true;
   await editor.fill(JSON.stringify(editedConfig, null, 2));
   await page.getByRole("button", { name: "备份并写入修改" }).click();
   await expect(page.getByText(/已写入手动修改的配置/)).toBeVisible();
   const backupName = await backups.locator(".application-backup-row b").first().textContent();
   await backups.getByRole("button", { name: "删除" }).first().click();
   await expect(page.getByRole("heading", { name: "删除配置备份？" })).toBeVisible();
+  const deleteDialogCopy = page.locator(".confirm-dialog-copy");
+  expect(
+    await deleteDialogCopy.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
   await page.getByRole("button", { name: "删除备份" }).click();
-  await expect(page.getByText(`已删除备份 ${backupName}。`)).toBeVisible();
+  const deletedMessage = page.getByText(`已删除备份 ${backupName}。`);
+  await expect(deletedMessage).toBeVisible();
+  await expect(deletedMessage).toHaveCSS("overflow-wrap", "anywhere");
+  expect(
+    await deletedMessage.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth,
+    ),
+  ).toBe(true);
   await expect(
     backups.locator(".application-backup-row b", { hasText: backupName ?? "" }),
   ).toHaveCount(0);
@@ -102,8 +128,8 @@ test("application manifest, preview, apply and gateway verification", async ({
     /inferenceGatewayBaseUrl/,
   );
 
-  await page.getByRole("tab", { name: "Codex CLI" }).click();
-  await expect(page.getByRole("heading", { name: "Codex CLI" })).toBeVisible();
+	await page.getByRole("tab", { name: "Codex CLI / ChatGPT App" }).click();
+	await expect(page.getByRole("heading", { name: "Codex CLI / ChatGPT App" })).toBeVisible();
   await expect(
     page.getByLabel("/tmp/airoute-codex-e2e.toml", { exact: true }),
   ).toBeVisible();
@@ -114,6 +140,15 @@ test("application manifest, preview, apply and gateway verification", async ({
 		"fast → 所有兼容协议",
 		"mimo-v2.5 → OpenAI Responses",
 	]);
+  await expect(page.getByLabel("Codex 接入方式")).toHaveCount(0);
+  await expect(
+    page.getByText("正在使用 AI Router 兼容转换"),
+  ).toBeVisible();
+  await expect(page.getByText(/修复 custom tools 与 reasoning 差异/)).toBeVisible();
+  await page.getByLabel("默认模型").selectOption("");
+  await expect(page.getByText("正在使用 AI Router 兼容转换")).toHaveCount(0);
+  await expect(page.getByText(/修复 custom tools 与 reasoning 差异/)).toHaveCount(0);
+  await page.getByLabel("默认模型").selectOption("fast");
   await expect(page.getByText("Sonnet 角色")).toHaveCount(0);
   await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
     /wire_api = "responses"/,
@@ -123,12 +158,7 @@ test("application manifest, preview, apply and gateway verification", async ({
     .click();
   await expect(page.getByText(/已写入 \/tmp\/airoute-codex-e2e\.toml/)).toBeVisible();
 
-  await page.getByRole("tab", { name: "ChatGPT App" }).click();
-  await expect(page.getByRole("heading", { name: "ChatGPT App" })).toBeVisible();
-  await expect(
-    page.getByLabel("/tmp/airoute-codex-e2e.toml", { exact: true }),
-  ).toBeVisible();
-  await expect(page.getByText(/共享 ~\/\.codex\/config\.toml/)).toBeVisible();
+	await expect(page.getByText(/共享 ~\/\.codex\/config\.toml/)).toBeVisible();
 
   await page.getByRole("tab", { name: "MiMo Code" }).click();
   await expect(page.getByRole("heading", { name: "MiMo Code" })).toBeVisible();

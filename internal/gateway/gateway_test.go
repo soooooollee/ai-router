@@ -27,6 +27,7 @@ import (
 	"github.com/zbss/airoute/internal/protocol/ir"
 	"github.com/zbss/airoute/internal/protocol/openaichat"
 	"github.com/zbss/airoute/internal/protocol/openairesponses"
+	providerprofile "github.com/zbss/airoute/internal/provider"
 )
 
 func TestGatewayAllNonStreamingDirections(t *testing.T) {
@@ -151,6 +152,59 @@ func TestGatewayTranslatesAnthropicStreamToOpenAI(t *testing.T) {
 	records := logs.List(1)
 	if len(records) != 1 || !strings.Contains(records[0].ResponseBody, `"delta":"hello"`) {
 		t.Fatalf("streamed response body was not captured: %#v", records)
+	}
+}
+
+func TestGatewayBridgesCodexCustomToolThroughChatStream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		raw, _ := io.ReadAll(r.Body)
+		var request map[string]any
+		if json.Unmarshal(raw, &request) != nil {
+			t.Errorf("invalid upstream request: %s", raw)
+		}
+		tools, _ := request["tools"].([]any)
+		tool := map[string]any{}
+		if len(tools) > 0 {
+			tool, _ = tools[0].(map[string]any)
+		}
+		function, _ := tool["function"].(map[string]any)
+		parameters, _ := function["parameters"].(map[string]any)
+		properties, _ := parameters["properties"].(map[string]any)
+		choice, _ := request["tool_choice"].(map[string]any)
+		choiceFunction, _ := choice["function"].(map[string]any)
+		if function["name"] != "apply_patch" || properties["input"] == nil || choiceFunction["name"] != "apply_patch" {
+			t.Errorf("custom tool was not converted to a Chat function: %s", raw)
+		}
+
+		w.Header().Set("content-type", "text/event-stream")
+		for _, event := range []string{
+			`data: {"id":"r1","choices":[{"index":0,"delta":{"role":"assistant"}}]}` + "\n\n",
+			`data: {"id":"r1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"id":"call_patch","type":"function","function":{"name":"apply_patch","arguments":"{\\\"input\\\":\\\"*** Begin Patch\\n"}}]}}]}` + "\n\n",
+			`data: {"id":"r1","choices":[{"index":0,"delta":{"tool_calls":[{"index":0,"function":{"arguments":"*** End Patch\\\"}"}}]},"finish_reason":"tool_calls"}]}` + "\n\n",
+			"data: [DONE]\n\n",
+		} {
+			_, _ = io.WriteString(w, event)
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer upstream.Close()
+
+	g := gateway.New(config.NewStore(testConfig(upstream.URL, ir.OpenAIChat)), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	body := `{"model":"alias","input":"Patch the file.","stream":true,"tools":[{"type":"custom","name":"apply_patch","description":"Apply a patch.","format":{"type":"grammar","syntax":"lark","definition":"start: patch"}}],"tool_choice":{"type":"custom","name":"apply_patch"}}`
+	resp, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	result := string(raw)
+	if resp.StatusCode != http.StatusOK || !strings.Contains(result, `"type":"custom_tool_call"`) || !strings.Contains(result, "response.custom_tool_call_input.delta") || !strings.Contains(result, "*** Begin Patch") || !strings.Contains(result, "response.custom_tool_call_input.done") {
+		t.Fatalf("custom tool was not restored for Codex: status=%d\n%s", resp.StatusCode, result)
+	}
+	if strings.Contains(result, "response.function_call_arguments") {
+		t.Fatalf("custom tool leaked as a function call:\n%s", result)
 	}
 }
 
@@ -628,6 +682,39 @@ func TestCountTokensUsesNativeProviderCapability(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusOK || !bytes.Contains(raw, []byte(`"input_tokens":123`)) || !bytes.Contains(raw, []byte(`"estimated":false`)) || !bytes.Contains(raw, []byte(`"strategy":"provider-native"`)) {
 		t.Fatalf("native count response is wrong: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestXiaomiAnthropicRuntimeUsesBearerAuthentication(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/anthropic/v1/messages" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.Header.Get("authorization") != "Bearer x" || r.Header.Get("x-api-key") != "" {
+			t.Errorf("unexpected Xiaomi Anthropic authentication: %#v", r.Header)
+			http.Error(w, "bad authentication", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write(responseFor(ir.Anthropic))
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL+"/anthropic", ir.Anthropic)
+	c.Providers[0].Profile = providerprofile.ProfileXiaomiMiMo
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+
+	path, body := clientRequest(ir.Anthropic, false)
+	resp, err := http.Post(server.URL+path, "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("Xiaomi Anthropic request failed: %d %s", resp.StatusCode, raw)
 	}
 }
 

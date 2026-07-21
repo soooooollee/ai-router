@@ -18,6 +18,7 @@ providers:
   - id: mock
     name: Mock Provider
     protocol: openai-chat
+    compatibility_mode: codex-chat
     base_url: http://127.0.0.1:19090/v1
     api_key: ${E2E_PROVIDER_KEY}
     models: [mock-model, secondary-upstream]

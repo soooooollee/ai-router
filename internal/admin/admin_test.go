@@ -2,7 +2,9 @@ package admin
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -22,6 +25,33 @@ import (
 	"github.com/zbss/airoute/internal/protocol/openaichat"
 	"github.com/zbss/airoute/internal/protocol/openairesponses"
 )
+
+func requestedChatToolName(payload map[string]any) string {
+	tools, _ := payload["tools"].([]any)
+	if len(tools) == 0 {
+		return "airoute_probe"
+	}
+	tool, _ := tools[0].(map[string]any)
+	function, _ := tool["function"].(map[string]any)
+	name, _ := function["name"].(string)
+	if name == "" {
+		return "airoute_probe"
+	}
+	return name
+}
+
+func requestedResponsesToolName(payload map[string]any) string {
+	tools, _ := payload["tools"].([]any)
+	if len(tools) == 0 {
+		return "airoute_probe"
+	}
+	tool, _ := tools[0].(map[string]any)
+	name, _ := tool["name"].(string)
+	if name == "" {
+		return "airoute_probe"
+	}
+	return name
+}
 
 func TestSummaryIncludesCurrentProcessFirstTokenAverage(t *testing.T) {
 	metrics := &observe.Metrics{}
@@ -92,7 +122,14 @@ logging:
 	if resp.StatusCode != 200 {
 		t.Fatal(resp.Status)
 	}
+	var statusBody map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&statusBody); err != nil {
+		t.Fatal(err)
+	}
 	resp.Body.Close()
+	if statusBody["models"] != float64(1) || statusBody["applications_total"] != float64(4) || statusBody["logs"] != float64(0) || statusBody["logging_persist"] != false {
+		t.Fatalf("status configuration summary is incomplete: %#v", statusBody)
+	}
 	if err := os.Chmod(path, 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -185,6 +222,16 @@ logging:
 		t.Fatalf("static UI unavailable: %d", resp.StatusCode)
 	}
 	resp.Body.Close()
+}
+
+func TestConfiguredModelCountDeduplicatesWithinAProvider(t *testing.T) {
+	c := &config.Config{Providers: []config.Provider{
+		{ID: "one", Models: []string{"model-a", "model-a", " model-b ", ""}},
+		{ID: "two", Models: []string{"model-a"}},
+	}}
+	if count := configuredModelCount(c); count != 3 {
+		t.Fatalf("configured model count = %d, want 3", count)
+	}
 }
 
 func TestRedactLogBodyForWebDisplay(t *testing.T) {
@@ -294,7 +341,7 @@ func TestDetectProviderBeforeSave(t *testing.T) {
 	s := New(config.NewStore(c), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
 	ts := httptest.NewServer(s)
 	defer ts.Close()
-	payload, _ := json.Marshal(map[string]any{"base_url": upstream.URL + "/v1", "api_key": "test-key", "models": []string{"Qwen/Qwen3-Test"}, "allow_private_url": true})
+	payload, _ := json.Marshal(map[string]any{"base_url": upstream.URL + "/v1", "api_key": "test-key", "models": []string{"Qwen/Qwen3-Test", "Qwen/Qwen3-Second"}, "allow_private_url": true})
 	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/providers/detect", bytes.NewReader(payload))
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("authorization", "Bearer test-admin-token-1234567890")
@@ -307,6 +354,416 @@ func TestDetectProviderBeforeSave(t *testing.T) {
 	_ = json.NewDecoder(resp.Body).Decode(&result)
 	if result["ok"] != true || result["protocol"] != string(ir.OpenAIChat) || result["profile"] != "qwen3" {
 		t.Fatalf("unexpected detection result: %#v", result)
+	}
+	modelReports, _ := result["model_reports"].(map[string]any)
+	if len(modelReports) != 2 {
+		t.Fatalf("detection did not retain per-model evidence: %#v", result["model_reports"])
+	}
+	streamRequest, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/providers/detect?stream=1", bytes.NewReader(payload))
+	streamRequest.Header.Set("content-type", "application/json")
+	streamRequest.Header.Set("authorization", "Bearer test-admin-token-1234567890")
+	streamResponse, streamErr := http.DefaultClient.Do(streamRequest)
+	if streamErr != nil {
+		t.Fatal(streamErr)
+	}
+	streamBody, _ := io.ReadAll(streamResponse.Body)
+	_ = streamResponse.Body.Close()
+	if streamResponse.StatusCode != http.StatusOK || !strings.Contains(streamResponse.Header.Get("content-type"), "text/event-stream") || !bytes.Contains(streamBody, []byte("event: progress")) || !bytes.Contains(streamBody, []byte("event: result")) || !bytes.Contains(streamBody, []byte(`"detector_version":7`)) {
+		t.Fatalf("streaming detection did not return progress and result events: status=%d body=%s", streamResponse.StatusCode, streamBody)
+	}
+}
+
+func TestDetectProviderReportsCodexDegradedCompatibility(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/responses":
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"cause":"Account invalid","message":"parameter validation failed"}}`)
+		case "/v1/chat/completions":
+			var payload map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&payload)
+			if _, hasTools := payload["tools"]; hasTools && payload["reasoning_effort"] != nil {
+				w.WriteHeader(http.StatusBadRequest)
+				_, _ = io.WriteString(w, `{"error":{"message":"Function tools with reasoning_effort are not supported"}}`)
+				return
+			}
+			if payload["stream"] == true && payload["tools"] != nil {
+				w.Header().Set("content-type", "text/event-stream")
+				name := requestedChatToolName(payload)
+				arguments := `{"city":"Beijing"}`
+				if name == "apply_patch" {
+					arguments = `{"input":"*** Begin Patch\\n*** End Patch"}`
+				}
+				fmt.Fprintf(w, "data: {\"id\":\"r1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"probe\",\"type\":\"function\",\"function\":{\"name\":%q,\"arguments\":%q}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", name, arguments)
+				return
+			}
+			if payload["stream"] == true {
+				w.Header().Set("content-type", "text/event-stream")
+				_, _ = io.WriteString(w, "data: {\"id\":\"r1\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n")
+				return
+			}
+			w.Header().Set("content-type", "application/json")
+			if _, hasTools := payload["tools"]; hasTools {
+				name := requestedChatToolName(payload)
+				fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","reasoning_content":"checked tool","tool_calls":[{"id":"probe","type":"function","function":{"name":%q,"arguments":"{\"city\":\"Beijing\"}"}}]}}]}`, name)
+				return
+			}
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	c := &config.Config{Admin: config.Admin{Enabled: true, Token: "test-admin-token-1234567890"}}
+	s := New(config.NewStore(c), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+	payload, _ := json.Marshal(map[string]any{"base_url": upstream.URL + "/v1", "api_key": "test-key", "models": []string{"gpt-test"}, "allow_private_url": true})
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/providers/detect", bytes.NewReader(payload))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("authorization", "Bearer test-admin-token-1234567890")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var result providerDetectionReport
+	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	chat := result.Protocols[ir.OpenAIChat]
+	if !result.OK || result.Protocol != ir.OpenAIChat || result.CodexCompatibility.Status != "degraded" {
+		t.Fatalf("unexpected detection result: status=%s stream=%#v tools=%#v combined=%#v roundtrip=%#v e2e=%#v", result.CodexCompatibility.Status, chat.Streaming, chat.Tools, chat.ToolsWithReasoning, chat.ToolRoundTrip, chat.CodexEndToEnd)
+	}
+	if len(result.CodexCompatibility.RecommendedOmitFields) != 1 || result.CodexCompatibility.RecommendedOmitFields[0] != "reasoning_effort" {
+		t.Fatalf("missing Codex compatibility policy: %#v", result.CodexCompatibility)
+	}
+	if result.CodexCompatibility.RecommendedCompatibilityMode != "codex-chat" {
+		t.Fatalf("missing first-class Codex Chat mode: %#v", result.CodexCompatibility)
+	}
+	if _, probedResponses := result.Protocols[ir.OpenAIResponses]; !probedResponses {
+		t.Fatalf("Responses must be evaluated before falling back to Chat: %#v", result.Protocols)
+	}
+	if chat.Streaming == nil || !chat.Streaming.OK || chat.Tools == nil || !chat.Tools.OK {
+		t.Fatalf("capability matrix did not capture usable Chat: %#v", result.Protocols)
+	}
+	if chat.ToolsWithReasoning == nil || chat.ToolsWithReasoning.OK || chat.ToolsWithReasoning.ErrorCode != "tools_with_reasoning_unsupported" {
+		t.Fatalf("combined capability failure was not classified: %#v", chat.ToolsWithReasoning)
+	}
+}
+
+func TestProviderDetectionFallsBackToChatAndLimitsAdvancedConcurrency(t *testing.T) {
+	var inFlight atomic.Int32
+	var maxInFlight atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["stream"] == true || payload["tools"] != nil || payload["reasoning_effort"] != nil {
+			current := inFlight.Add(1)
+			for {
+				maximum := maxInFlight.Load()
+				if current <= maximum || maxInFlight.CompareAndSwap(maximum, current) {
+					break
+				}
+			}
+			defer inFlight.Add(-1)
+			time.Sleep(50 * time.Millisecond)
+		}
+		if payload["stream"] == true && payload["tools"] != nil {
+			w.Header().Set("content-type", "text/event-stream")
+			name := requestedChatToolName(payload)
+			arguments := `{"input":"*** Begin Patch\\n*** End Patch"}`
+			fmt.Fprintf(w, "data: {\"id\":\"r1\",\"choices\":[{\"index\":0,\"delta\":{\"tool_calls\":[{\"index\":0,\"id\":\"probe\",\"type\":\"function\",\"function\":{\"name\":%q,\"arguments\":%q}}]},\"finish_reason\":\"tool_calls\"}]}\n\ndata: [DONE]\n\n", name, arguments)
+			return
+		}
+		if payload["stream"] == true {
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: {\"id\":\"r1\",\"choices\":[{\"delta\":{\"content\":\"OK\"}}]}\n\ndata: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		if payload["tools"] != nil {
+			name := requestedChatToolName(payload)
+			fmt.Fprintf(w, `{"choices":[{"message":{"role":"assistant","reasoning_content":"reasoned","tool_calls":[{"id":"probe","type":"function","function":{"name":%q,"arguments":"{\"city\":\"Beijing\"}"}}]}}]}`, name)
+			return
+		}
+		if payload["reasoning_effort"] != nil {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","reasoning_content":"reasoned","content":"OK"}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`)
+	}))
+	defer upstream.Close()
+
+	c := &config.Config{Admin: config.Admin{Enabled: true}}
+	s := New(config.NewStore(c), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
+	result := s.detectProviderCapabilities(context.Background(), upstream.URL+"/v1", "test-key", []string{"gpt-test"}, true)
+	if result.Protocol != ir.OpenAIChat || result.CodexCompatibility.Status != "degraded" || result.CodexCompatibility.RecommendedIntegrationMode != "compatibility" {
+		chat := result.Protocols[ir.OpenAIChat]
+		t.Fatalf("generic OpenAI Chat endpoint was not classified as Router compatibility: status=%s stream=%#v tools=%#v combined=%#v roundtrip=%#v e2e=%#v", result.CodexCompatibility.Status, chat.Streaming, chat.Tools, chat.ToolsWithReasoning, chat.ToolRoundTrip, chat.CodexEndToEnd)
+	}
+	if maxInFlight.Load() < 2 || maxInFlight.Load() > 2 {
+		t.Fatalf("advanced probes should be rate-limit friendly; max in-flight = %d", maxInFlight.Load())
+	}
+	if _, probedResponses := result.Protocols[ir.OpenAIResponses]; !probedResponses {
+		t.Fatalf("Responses should be probed before Chat: %#v", result.Protocols)
+	}
+}
+
+func TestProviderDetectionCachesAndForceRefreshesEquivalentRequests(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		if r.URL.Path != "/v1/chat/completions" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["stream"] == true {
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		if payload["tools"] != nil {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","tool_calls":[{"id":"probe","type":"function","function":{"name":"airoute_probe","arguments":"{}"}}]}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`)
+	}))
+	defer upstream.Close()
+
+	s := New(config.NewStore(&config.Config{Admin: config.Admin{Enabled: true}}), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
+	first := s.detectProviderCapabilities(context.Background(), upstream.URL+"/v1", "test-key", []string{"gpt-test"}, true)
+	firstRequestCount := requests.Load()
+	second := s.detectProviderCapabilities(context.Background(), upstream.URL+"/v1", "test-key", []string{"gpt-test"}, true)
+	if first.Cached || !second.Cached {
+		t.Fatalf("unexpected cache markers: first=%v second=%v", first.Cached, second.Cached)
+	}
+	if requests.Load() != firstRequestCount {
+		t.Fatalf("cached detection issued new requests: before=%d after=%d", firstRequestCount, requests.Load())
+	}
+
+	forced := s.detectProviderCapabilitiesWithOptions(context.Background(), upstream.URL+"/v1", "test-key", []string{"gpt-test"}, true, true)
+	if forced.Cached || requests.Load() <= firstRequestCount {
+		t.Fatalf("force refresh did not run probes: cached=%v requests=%d", forced.Cached, requests.Load())
+	}
+}
+
+func TestProviderDetectionDeduplicatesConcurrentRequests(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		time.Sleep(20 * time.Millisecond)
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["stream"] == true {
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, "data: [DONE]\n\n")
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		if payload["tools"] != nil {
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"tool_calls":[{"type":"function","function":{"name":"airoute_probe","arguments":"{}"}}]}}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"choices":[{"message":{"content":"OK"}}]}`)
+	}))
+	defer upstream.Close()
+
+	s := New(config.NewStore(&config.Config{Admin: config.Admin{Enabled: true}}), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
+	results := make(chan providerDetectionReport, 2)
+	for range 2 {
+		go func() {
+			results <- s.detectProviderCapabilities(context.Background(), upstream.URL+"/v1", "test-key", []string{"gpt-test"}, true)
+		}()
+	}
+	first, second := <-results, <-results
+	if !first.OK || !second.OK {
+		t.Fatalf("deduplicated probes failed: first=%#v second=%#v", first, second)
+	}
+	if requests.Load() != 7 {
+		t.Fatalf("expected one Responses attempt, five Chat contract requests, and one Router fallback verification, got %d", requests.Load())
+	}
+}
+
+func TestProviderProbeUsesCompatibleMinimumOutputBudget(t *testing.T) {
+	for _, protocolName := range []ir.Protocol{ir.OpenAIChat, ir.OpenAIResponses, ir.Anthropic} {
+		_, _, raw, err := providerProbeRequest(config.Provider{Protocol: protocolName, BaseURL: "https://example.com/v1", Models: []string{"m"}}, probeBasic)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var payload map[string]any
+		if err = json.Unmarshal(raw, &payload); err != nil {
+			t.Fatal(err)
+		}
+		field := map[ir.Protocol]string{ir.OpenAIChat: "max_completion_tokens", ir.OpenAIResponses: "max_output_tokens", ir.Anthropic: "max_tokens"}[protocolName]
+		want := float64(256)
+		if protocolName == ir.Anthropic {
+			want = 16
+		}
+		if payload[field] != want {
+			t.Fatalf("%s probe used an incompatible output budget: %#v", protocolName, payload)
+		}
+	}
+}
+
+func TestMiMoDetectionUsesResponsesAutoToolsAndCodexEndToEnd(t *testing.T) {
+	var nonAutoToolChoice atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["tools"] != nil && requestedResponsesToolName(payload) == "airoute_probe" && payload["tool_choice"] != "auto" {
+			nonAutoToolChoice.Add(1)
+		}
+		if payload["stream"] == true {
+			w.Header().Set("content-type", "text/event-stream")
+			if payload["tools"] != nil {
+				name := requestedResponsesToolName(payload)
+				_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_mimo\",\"model\":\"mimo-v2.5\"}}\n\n")
+				fmt.Fprintf(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call_1\",\"name\":%q}}\n\n", name)
+				_, _ = io.WriteString(w, "event: response.function_call_arguments.delta\ndata: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"input\\\":\\\"*** Begin Patch\\\\n*** End Patch\\\"}\"}\n\n")
+				_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_mimo\",\"usage\":{\"input_tokens\":10,\"output_tokens\":5,\"total_tokens\":15}}}\n\n")
+				return
+			}
+			_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_mimo\"}}\n\nevent: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"delta\":\"OK\"}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_mimo\"}}\n\n")
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		if payload["tools"] != nil {
+			name := requestedResponsesToolName(payload)
+			fmt.Fprintf(w, `{"id":"resp_mimo","status":"completed","model":"mimo-v2.5","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"use tool"}]},{"type":"function_call","call_id":"call_1","name":%q,"arguments":"{\"city\":\"Beijing\"}"}]}`, name)
+			return
+		}
+		if _, hasThinking := payload["thinking"]; hasThinking {
+			_, _ = io.WriteString(w, `{"id":"resp_mimo","status":"completed","model":"mimo-v2.5","output":[{"type":"reasoning","summary":[{"type":"summary_text","text":"checked"}]}]}`)
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"resp_mimo","status":"completed","model":"mimo-v2.5","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"OK"}]}]}`)
+	}))
+	defer upstream.Close()
+
+	s := New(config.NewStore(&config.Config{Admin: config.Admin{Enabled: true}}), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
+	result := s.detectProviderCapabilities(context.Background(), upstream.URL+"/v1", "test-key", []string{"mimo-v2.5"}, true)
+	responses := result.Protocols[ir.OpenAIResponses]
+	if result.Protocol != ir.OpenAIResponses || result.CodexCompatibility.Status != "degraded" || result.CodexCompatibility.RecommendedCompatibilityMode != "codex-responses" || result.CodexCompatibility.RecommendedIntegrationMode != "compatibility" {
+		t.Fatalf("MiMo Responses without native custom tools was not classified as Router compatibility: status=%s stream=%#v tools=%#v combined=%#v roundtrip=%#v direct=%#v e2e=%#v", result.CodexCompatibility.Status, responses.Streaming, responses.Tools, responses.ToolsWithReasoning, responses.ToolRoundTrip, responses.CodexDirect, responses.CodexEndToEnd)
+	}
+	if result.CodexCompatibility.RecommendedToolChoiceMode != "auto-only" || nonAutoToolChoice.Load() != 0 {
+		t.Fatalf("MiMo tool negotiation did not use auto-only: recommendation=%q non_auto=%d", result.CodexCompatibility.RecommendedToolChoiceMode, nonAutoToolChoice.Load())
+	}
+	if responses.CodexEndToEnd == nil || responses.CodexEndToEnd.State != capabilitySupported {
+		t.Fatalf("Codex end-to-end custom tool was not verified: %#v", responses.CodexEndToEnd)
+	}
+	if _, chatProbed := result.Protocols[ir.OpenAIChat]; chatProbed {
+		t.Fatalf("native MiMo Responses succeeded, so Chat fallback should not run: %#v", result.Protocols)
+	}
+}
+
+func TestCodexOfficialDirectRequiresNativeCustomToolRoundTrip(t *testing.T) {
+	var calls atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		calls.Add(1)
+		if payload["stream"] == true {
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"item\":{\"type\":\"custom_tool_call\",\"call_id\":\"call_direct\",\"name\":\"apply_patch\",\"input\":\"\"}}\n\n")
+			_, _ = io.WriteString(w, "event: response.custom_tool_call_input.delta\ndata: {\"type\":\"response.custom_tool_call_input.delta\",\"delta\":\"*** Begin Patch\\n*** End Patch\"}\n\n")
+			_, _ = io.WriteString(w, "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_direct\",\"output\":[]}}\n\n")
+			return
+		}
+		_, _ = io.WriteString(w, `{"id":"resp_followup","status":"completed","output":[{"type":"message","role":"assistant","content":[{"type":"output_text","text":"done"}]}]}`)
+	}))
+	defer upstream.Close()
+
+	server := New(config.NewStore(&config.Config{Admin: config.Admin{Enabled: true}}), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
+	result := server.verifyCodexDirect(context.Background(), config.Provider{
+		Protocol: ir.OpenAIResponses, BaseURL: upstream.URL + "/v1", APIKey: "test-key",
+		Models: []string{"gpt-direct"}, AllowPrivateURL: true, Timeout: providerProbeTimeout,
+	})
+	if result.State != capabilitySupported || !result.OK || !hasCapabilityEvidence(result, "codex_official_direct") || calls.Load() != 2 {
+		t.Fatalf("native Codex direct verification failed: result=%#v calls=%d", result, calls.Load())
+	}
+}
+
+func TestAutoToolNotObservedIsUnverifiedNotIncompatible(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/responses" {
+			http.NotFound(w, r)
+			return
+		}
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		if payload["stream"] == true {
+			w.Header().Set("content-type", "text/event-stream")
+			_, _ = io.WriteString(w, "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"r\"}}\n\nevent: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"r\"}}\n\n")
+			return
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"id":"r","status":"completed","output":[{"type":"message","content":[{"type":"output_text","text":"I answered directly"}]}]}`)
+	}))
+	defer upstream.Close()
+	s := New(config.NewStore(&config.Config{}), protocol.NewRegistry(), observe.NewStore(2), &observe.Metrics{}, "test", "")
+	result := s.detectProviderCapabilities(context.Background(), upstream.URL+"/v1", "key", []string{"mimo-v2.5"}, true)
+	if result.CodexCompatibility.Status != "unverified" || result.Protocols[ir.OpenAIResponses].Tools.State != capabilityInconclusive {
+		t.Fatalf("auto tool miss was treated as incompatibility: %#v", result.CodexCompatibility)
+	}
+}
+
+func TestProviderHealthUsesInferenceAndTreatsModelsAsOptional(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/models" {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = io.WriteString(w, `{"error":{"cause":"Account invalid"}}`)
+			return
+		}
+		if r.URL.Path == "/v1/chat/completions" {
+			w.Header().Set("content-type", "application/json")
+			_, _ = io.WriteString(w, `{"choices":[{"message":{"role":"assistant","content":"OK"}}]}`)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer upstream.Close()
+
+	c := &config.Config{
+		Admin: config.Admin{Enabled: true, Token: "test-admin-token-1234567890"},
+		Providers: []config.Provider{{
+			ID: "p", Protocol: ir.OpenAIChat, BaseURL: upstream.URL + "/v1", APIKey: "test-key", Models: []string{"gpt-test"}, AllowPrivateURL: true,
+		}},
+	}
+	s := New(config.NewStore(c), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "")
+	ts := httptest.NewServer(s)
+	defer ts.Close()
+	req, _ := http.NewRequest(http.MethodPost, ts.URL+"/api/providers/p/probe", strings.NewReader(`{}`))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("authorization", "Bearer test-admin-token-1234567890")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	var result map[string]any
+	if err = json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		t.Fatal(err)
+	}
+	if result["ok"] != true || result["models_ok"] != false || result["models_error_code"] != "authentication_failed" {
+		t.Fatalf("models discovery incorrectly determined provider health: %#v", result)
 	}
 }
 
@@ -383,8 +840,12 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	}
 
 	resp, body := request(http.MethodGet, "/api/apps?detect=false", "")
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) || !bytes.Contains(body, []byte(`"id":"chatgpt-app"`)) || !bytes.Contains(body, []byte(`"id":"codex"`)) || !bytes.Contains(body, []byte(`"id":"mimo-code"`)) {
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) || bytes.Contains(body, []byte(`"id":"chatgpt-app"`)) || !bytes.Contains(body, []byte(`"id":"codex"`)) || !bytes.Contains(body, []byte(`"name":"Codex CLI / ChatGPT App"`)) || !bytes.Contains(body, []byte(`"id":"mimo-code"`)) {
 		t.Fatalf("application list failed (%d): %s", resp.StatusCode, body)
+	}
+	resp, body = request(http.MethodGet, "/api/apps/chatgpt-app", "")
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("removed ChatGPT application alias is still reachable (%d): %s", resp.StatusCode, body)
 	}
 	resp, body = request(http.MethodGet, "/api/apps/claude-code", "")
 	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"ANTHROPIC_API_KEY":"must-not-leak"`)) {

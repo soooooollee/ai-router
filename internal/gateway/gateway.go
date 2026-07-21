@@ -314,7 +314,7 @@ func (g *Gateway) nativeTokenCount(ctx context.Context, request *ir.Request, tar
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "application/json")
 	req.Header.Set("anthropic-version", "2023-06-01")
-	req.Header.Set("x-api-key", target.Provider.APIKey)
+	providerprofile.ApplyAuthenticationHeaders(req.Header, target.Provider)
 	for key, value := range target.Provider.Headers {
 		if allowedProviderHeader(key) {
 			req.Header.Set(key, value)
@@ -413,6 +413,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	canonical.ID = id
 	record.RequestedModel = canonical.Model
 	canonical.Model = decodeClaudeAppRouteModel(canonical.Model)
+	customTools := customToolNames(canonical)
 	record.Diagnostics = append(record.Diagnostics, diagnostics...)
 	if c.Conversion.RemoteImagePolicy == "reject" && common.HasType(canonical, "image_url") {
 		record.Status = 422
@@ -466,16 +467,22 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		}
 		var payload []byte
 		var d []ir.Diagnostic
-		if clientProtocol == t.Provider.Protocol {
+		forceCodexResponsesBridge := clientProtocol == ir.OpenAIResponses && t.Provider.Protocol == ir.OpenAIResponses && t.Provider.CompatibilityMode == "codex-responses"
+		if clientProtocol == t.Provider.Protocol && !forceCodexResponsesBridge {
 			payload, e = rewriteNativeRequest(body, t.Model, t.Provider.Protocol)
 		} else {
+			if forceCodexResponsesBridge {
+				bridgeCodexCustomTools(canonical)
+			}
 			payload, d, e = outAdapter.EncodeRequest(r.Context(), canonical)
 			if e == nil {
 				payload = sanitizeProviderPayload(payload, t.Provider.Protocol)
 			}
 		}
 		if e == nil {
-			payload, e = providerprofile.PrepareRequest(payload, t.Provider, canonical)
+			var policyDiagnostics []ir.Diagnostic
+			payload, policyDiagnostics, e = providerprofile.PrepareRequest(payload, t.Provider, canonical)
+			d = append(d, policyDiagnostics...)
 		}
 		record.Diagnostics = append(record.Diagnostics, d...)
 		if e != nil {
@@ -591,7 +598,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		w.Header().Add("x-airoute-diagnostic", d.Code)
 	}
 	if canonical.Stream {
-		g.stream(w, r.Context(), upstream, streamDecoder, prefetched, clientProtocol, target.Provider.Protocol, target.Model, id, c.Logging.CaptureBodies, &record)
+		g.stream(w, r.Context(), upstream, streamDecoder, prefetched, clientProtocol, target.Provider.Protocol, target.Model, id, customTools, c.Logging.CaptureBodies, &record)
 		return
 	}
 	rawResp, err := io.ReadAll(io.LimitReader(upstream.Body, c.Server.MaxBodySize))
@@ -624,6 +631,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		errorOut(w, clientProtocol, 502, "protocol_conversion_error", err.Error(), id)
 		return
 	}
+	markCustomToolCalls(canonicalResp, customTools)
 	canonicalResp.Model = target.Model
 	encoded, d, err := inAdapter.EncodeResponse(r.Context(), canonicalResp)
 	record.Diagnostics = append(record.Diagnostics, d...)
@@ -637,6 +645,25 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	w.Header().Set("content-type", "application/json")
 	w.WriteHeader(upstream.StatusCode)
 	_, _ = w.Write(encoded)
+}
+
+func bridgeCodexCustomTools(request *ir.Request) {
+	if request == nil {
+		return
+	}
+	for index := range request.Tools {
+		if request.Tools[index].Type == "custom" {
+			request.Tools[index].Type = "function"
+		}
+	}
+	for messageIndex := range request.Messages {
+		for blockIndex := range request.Messages[messageIndex].Content {
+			block := &request.Messages[messageIndex].Content[blockIndex]
+			if block.SourceType == "custom" {
+				block.SourceType = "function"
+			}
+		}
+	}
 }
 
 // Claude App only accepts Claude-shaped model identifiers in its discovery
@@ -675,14 +702,9 @@ func (g *Gateway) do(ctx context.Context, p config.Provider, payload []byte, str
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "application/json")
-	switch p.Protocol {
-	case ir.Anthropic:
-		req.Header.Set("x-api-key", p.APIKey)
+	providerprofile.ApplyAuthenticationHeaders(req.Header, p)
+	if p.Protocol == ir.Anthropic {
 		req.Header.Set("anthropic-version", "2023-06-01")
-	case ir.Gemini:
-		req.Header.Set("x-goog-api-key", p.APIKey)
-	default:
-		req.Header.Set("authorization", "Bearer "+p.APIKey)
 	}
 	for k, v := range p.Headers {
 		if allowedProviderHeader(k) {
@@ -711,7 +733,7 @@ type cancelBody struct {
 
 func (c *cancelBody) Close() error { e := c.ReadCloser.Close(); c.cancel(); return e }
 
-func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.Response, dec *streaming.Decoder, prefetched []streaming.Event, clientProtocol, providerProtocol ir.Protocol, model, id string, captureBody bool, record *observe.Record) {
+func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.Response, dec *streaming.Decoder, prefetched []streaming.Event, clientProtocol, providerProtocol ir.Protocol, model, id string, customTools map[string]bool, captureBody bool, record *observe.Record) {
 	defer resp.Body.Close()
 	decoderAdapter, _ := g.Registry.Get(providerProtocol)
 	encoderAdapter, _ := g.Registry.Get(clientProtocol)
@@ -729,6 +751,7 @@ func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.
 	pendingGeminiArgs := map[int]string{}
 	sequence := 0
 	normalizer := ir.NewStreamNormalizer()
+	customToolIndexes := map[int]bool{}
 	var lastUsage *ir.Usage
 	capturedEvents := make([]ir.Event, 0, 64)
 	capturedBytes := 0
@@ -764,6 +787,13 @@ func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.
 			return
 		}
 		for _, event := range events {
+			if event.Type == "tool_call.start" && event.Block != nil && customTools[event.Block.Name] {
+				event.Block.SourceType = "custom"
+				customToolIndexes[event.Index] = true
+			}
+			if event.Type == "tool_call.arguments.delta" && customToolIndexes[event.Index] {
+				event.Block = &ir.ContentBlock{Type: "tool_call", SourceType: "custom"}
+			}
 			if event.Model == "" {
 				event.Model = model
 			}
@@ -816,6 +846,33 @@ func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.
 						}
 					}
 				}
+			}
+		}
+	}
+}
+
+func customToolNames(request *ir.Request) map[string]bool {
+	result := map[string]bool{}
+	if request == nil {
+		return result
+	}
+	for _, tool := range request.Tools {
+		if tool.Type == "custom" && tool.Name != "" {
+			result[tool.Name] = true
+		}
+	}
+	return result
+}
+
+func markCustomToolCalls(response *ir.Response, customTools map[string]bool) {
+	if response == nil || len(customTools) == 0 {
+		return
+	}
+	for messageIndex := range response.Messages {
+		for blockIndex := range response.Messages[messageIndex].Content {
+			block := &response.Messages[messageIndex].Content[blockIndex]
+			if block.Type == "tool_call" && customTools[block.Name] {
+				block.SourceType = "custom"
 			}
 		}
 	}

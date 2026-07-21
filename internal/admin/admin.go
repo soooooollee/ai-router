@@ -29,7 +29,6 @@ import (
 	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/observe"
 	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/common"
 	"github.com/zbss/airoute/internal/protocol/ir"
 	providerprofile "github.com/zbss/airoute/internal/provider"
 	"github.com/zbss/airoute/internal/routing"
@@ -62,6 +61,9 @@ type Server struct {
 	updateMu          sync.Mutex
 	updateCached      UpdateInfo
 	updateCachedUntil time.Time
+	probeMu           sync.Mutex
+	probeCache        map[string]providerProbeCacheEntry
+	probeInFlight     map[string]*providerProbeCall
 	GatewayControl    interface {
 		SetEnabled(bool)
 		IsEnabled() bool
@@ -69,13 +71,17 @@ type Server struct {
 	}
 }
 
-func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Metrics, version, gatewayURL string) *Server {
+func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Metrics, version, gatewayURL string, configPaths ...string) *Server {
 	restrictedTransport := &http.Transport{Proxy: nil, DialContext: secure.PublicDialContext, ResponseHeaderTimeout: 30 * time.Second}
 	releaseURL := os.Getenv("AIROUTE_RELEASE_API_URL")
 	if releaseURL == "" {
 		releaseURL = defaultReleaseAPIURL
 	}
-	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, ReleaseURL: releaseURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codex.NewDesktop(), codex.New(), mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}}
+	codexAdapter := codex.New()
+	if len(configPaths) > 0 {
+		codexAdapter.RouterConfigPath = configPaths[0]
+	}
+	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, ReleaseURL: releaseURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codexAdapter, mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}, probeCache: map[string]providerProbeCacheEntry{}, probeInFlight: map[string]*providerProbeCall{}}
 }
 func (s *Server) CloseIdleConnections() {
 	s.Client.CloseIdleConnections()
@@ -160,7 +166,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		if s.GatewayControl != nil && !s.GatewayControl.IsEnabled() {
 			status = "stopped"
 		}
-		jsonOut(w, 200, map[string]any{"status": status, "runtime_state_persistent": false, "version": s.Version, "uptime_seconds": int(time.Since(s.Started).Seconds()), "config_version": c.Hash, "config_error": s.Config.LastError(), "gateway_url": s.GatewayURL, "providers": len(c.Providers), "routes": len(c.Routes), "provider_health": s.providerHealth(), "metrics": summary(s.Metrics, s.Logs)})
+		configuredApps, totalApps := applicationConfigurationCounts(r.Context(), s.Applications)
+		jsonOut(w, 200, map[string]any{"status": status, "runtime_state_persistent": false, "version": s.Version, "uptime_seconds": int(time.Since(s.Started).Seconds()), "config_version": c.Hash, "config_error": s.Config.LastError(), "gateway_url": s.GatewayURL, "providers": len(c.Providers), "models": configuredModelCount(c), "routes": len(c.Routes), "applications_configured": configuredApps, "applications_total": totalApps, "logs": len(s.Logs.List(0)), "logs_capacity": c.Logging.RequestHistory, "logging_persist": c.Logging.Persist, "logging_capture_bodies": c.Logging.CaptureBodies, "provider_health": s.providerHealth(), "metrics": summary(s.Metrics, s.Logs)})
 	case r.URL.Path == "/api/update" && r.Method == "GET":
 		jsonOut(w, 200, s.checkUpdate(r.Context()))
 	case r.URL.Path == "/api/runtime" && r.Method == "PUT":
@@ -263,6 +270,43 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 	default:
 		jsonOut(w, 404, map[string]any{"error": "not found"})
 	}
+}
+
+func configuredModelCount(c *config.Config) int {
+	count := 0
+	for _, provider := range c.Providers {
+		seen := make(map[string]struct{}, len(provider.Models))
+		for _, model := range provider.Models {
+			model = strings.TrimSpace(model)
+			if model == "" {
+				continue
+			}
+			if _, exists := seen[model]; exists {
+				continue
+			}
+			seen[model] = struct{}{}
+			count++
+		}
+	}
+	return count
+}
+
+func applicationConfigurationCounts(ctx context.Context, registry *application.Registry) (configured, total int) {
+	if registry == nil {
+		return 0, 0
+	}
+	for _, adapter := range registry.List() {
+		total++
+		reader, ok := adapter.(application.ConfigurationStatusReader)
+		if !ok {
+			continue
+		}
+		synced, err := reader.ConfigurationSynced(ctx)
+		if err == nil && synced {
+			configured++
+		}
+	}
+	return configured, total
 }
 
 func redactLogBody(raw string) string {
@@ -627,10 +671,6 @@ func (s *Server) rollback(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) probe(w http.ResponseWriter, r *http.Request, id string) {
-	var options struct {
-		TestRequest bool `json:"test_request"`
-	}
-	_ = json.NewDecoder(io.LimitReader(r.Body, 64<<10)).Decode(&options)
 	var p *config.Provider
 	for i := range s.Config.Get().Providers {
 		if s.Config.Get().Providers[i].ID == id {
@@ -642,109 +682,35 @@ func (s *Server) probe(w http.ResponseWriter, r *http.Request, id string) {
 		jsonOut(w, 404, map[string]any{"error": "provider not found"})
 		return
 	}
-	start := time.Now()
-	u := providerModelsURL(*p)
-	if e := secure.ValidatePublicTarget(r.Context(), u, p.AllowPrivateURL); e != nil {
-		report := map[string]any{"ok": false, "error": e.Error(), "latency_ms": time.Since(start).Milliseconds(), "checked_at": time.Now()}
-		s.setProviderHealth(id, report)
-		jsonOut(w, 200, report)
-		return
+	basic := s.runProviderCheck(r.Context(), *p, probeBasic)
+	models := s.runProviderCheck(r.Context(), *p, probeModels)
+	report := map[string]any{
+		"ok":                basic.OK,
+		"status":            basic.Status,
+		"latency_ms":        basic.LatencyMS,
+		"checked_at":        time.Now(),
+		"detected_protocol": p.Protocol,
+		"test_ok":           basic.OK,
+		"test_status":       basic.Status,
+		"models_ok":         models.OK,
+		"models_status":     models.Status,
+		"models_latency_ms": models.LatencyMS,
+		"models":            discoverModels(models.body),
+		"capabilities":      map[string]any{"basic": basic},
 	}
-	req, e := http.NewRequestWithContext(r.Context(), http.MethodGet, u, nil)
-	if e != nil {
-		apiError(w, 400, e)
-		return
+	if !basic.OK {
+		report["error"] = basic.Error
+		report["error_code"] = basic.ErrorCode
 	}
-	switch p.Protocol {
-	case ir.Anthropic:
-		req.Header.Set("x-api-key", p.APIKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	case ir.Gemini:
-		q := req.URL.Query()
-		q.Set("key", p.APIKey)
-		req.URL.RawQuery = q.Encode()
-	default:
-		req.Header.Set("authorization", "Bearer "+p.APIKey)
+	if !models.OK {
+		report["models_error"] = models.Error
+		report["models_error_code"] = models.ErrorCode
 	}
-	client := s.RestrictedClient
-	if p.AllowPrivateURL {
-		client = s.Client
-	}
-	resp, e := client.Do(req)
-	if e != nil {
-		report := map[string]any{"ok": false, "error": e.Error(), "latency_ms": time.Since(start).Milliseconds(), "checked_at": time.Now()}
-		s.setProviderHealth(id, report)
-		jsonOut(w, 200, report)
-		return
-	}
-	defer resp.Body.Close()
-	body, _ := io.ReadAll(io.LimitReader(resp.Body, 256<<10))
-	report := map[string]any{"ok": resp.StatusCode >= 200 && resp.StatusCode < 300, "status": resp.StatusCode, "latency_ms": time.Since(start).Milliseconds(), "checked_at": time.Now(), "detected_protocol": detectProtocol(*p, body), "models": discoverModels(body), "response": json.RawMessage(validJSON(body))}
-	if options.TestRequest {
-		testStatus, testError := s.minimalProviderTest(r.Context(), *p)
-		report["test_status"] = testStatus
-		report["test_ok"] = testError == nil && testStatus >= 200 && testStatus < 300
-		if testError != nil {
-			report["test_error"] = testError.Error()
-		}
+	if len(models.body) > 0 {
+		report["models_response"] = json.RawMessage(validJSON(models.body))
 	}
 	s.setProviderHealth(id, report)
 	jsonOut(w, 200, report)
-}
-
-func (s *Server) minimalProviderTest(ctx context.Context, p config.Provider) (int, error) {
-	model := ""
-	if len(p.Models) > 0 {
-		model = p.Models[0]
-	}
-	var endpoint string
-	var payload []byte
-	switch p.Protocol {
-	case ir.OpenAIChat:
-		endpoint = strings.TrimRight(p.BaseURL, "/") + "/chat/completions"
-		payload = common.Raw(map[string]any{"model": model, "max_completion_tokens": 8, "messages": []any{map[string]any{"role": "user", "content": "Reply OK"}}})
-	case ir.OpenAIResponses:
-		endpoint = strings.TrimRight(p.BaseURL, "/") + "/responses"
-		payload = common.Raw(map[string]any{"model": model, "max_output_tokens": 8, "input": "Reply OK"})
-	case ir.Anthropic:
-		endpoint = strings.TrimRight(p.BaseURL, "/") + "/v1/messages"
-		payload = common.Raw(map[string]any{"model": model, "max_tokens": 8, "messages": []any{map[string]any{"role": "user", "content": "Reply OK"}}})
-	case ir.Gemini:
-		base := strings.TrimRight(p.BaseURL, "/")
-		if !strings.Contains(base, "/v1beta") {
-			base += "/v1beta"
-		}
-		endpoint = base + "/models/" + url.PathEscape(model) + ":generateContent"
-		payload = common.Raw(map[string]any{"contents": []any{map[string]any{"role": "user", "parts": []any{map[string]any{"text": "Reply OK"}}}}})
-	}
-	if err := secure.ValidatePublicTarget(ctx, endpoint, p.AllowPrivateURL); err != nil {
-		return 0, err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		return 0, err
-	}
-	req.Header.Set("content-type", "application/json")
-	switch p.Protocol {
-	case ir.Anthropic:
-		req.Header.Set("x-api-key", p.APIKey)
-		req.Header.Set("anthropic-version", "2023-06-01")
-	case ir.Gemini:
-		req.Header.Set("x-goog-api-key", p.APIKey)
-	default:
-		req.Header.Set("authorization", "Bearer "+p.APIKey)
-	}
-	client := s.RestrictedClient
-	if p.AllowPrivateURL {
-		client = s.Client
-	}
-	resp, err := client.Do(req)
-	if err != nil {
-		return 0, err
-	}
-	defer resp.Body.Close()
-	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 256<<10))
-	return resp.StatusCode, nil
 }
 
 func (s *Server) detectProvider(w http.ResponseWriter, r *http.Request) {
@@ -753,6 +719,7 @@ func (s *Server) detectProvider(w http.ResponseWriter, r *http.Request) {
 		APIKey          string   `json:"api_key"`
 		Models          []string `json:"models"`
 		AllowPrivateURL bool     `json:"allow_private_url"`
+		ForceRefresh    bool     `json:"force_refresh"`
 	}
 	if json.NewDecoder(io.LimitReader(r.Body, 256<<10)).Decode(&in) != nil {
 		jsonOut(w, 400, map[string]any{"error": "invalid request"})
@@ -768,46 +735,36 @@ func (s *Server) detectProvider(w http.ResponseWriter, r *http.Request) {
 		apiError(w, http.StatusUnprocessableEntity, resolveErr)
 		return
 	}
-	profile := detectProviderProfile(in.BaseURL, in.Models)
-	candidates := []ir.Protocol{ir.OpenAIChat, ir.Anthropic, ir.OpenAIResponses, ir.Gemini}
-	lowerBase := strings.ToLower(in.BaseURL)
-	if strings.Contains(lowerBase, "anthropic") {
-		candidates = []ir.Protocol{ir.Anthropic, ir.OpenAIChat, ir.OpenAIResponses, ir.Gemini}
-	} else if strings.Contains(lowerBase, "generativelanguage") || strings.Contains(lowerBase, "gemini") {
-		candidates = []ir.Protocol{ir.Gemini, ir.OpenAIChat, ir.Anthropic, ir.OpenAIResponses}
+	if r.URL.Query().Get("stream") == "1" {
+		s.streamProviderDetection(w, r, in.BaseURL, resolvedAPIKey, in.Models, in.AllowPrivateURL, in.ForceRefresh)
+		return
 	}
-	started := time.Now()
-	attempts := make([]map[string]any, 0, len(candidates))
-	for _, candidate := range candidates {
-		p := config.Provider{Protocol: candidate, BaseURL: in.BaseURL, APIKey: resolvedAPIKey, Models: in.Models, AllowPrivateURL: in.AllowPrivateURL, Timeout: 30 * time.Second}
-		status, err := s.minimalProviderTest(r.Context(), p)
-		attempt := map[string]any{"protocol": candidate, "status": status}
-		if err != nil {
-			attempt["error"] = err.Error()
-		}
-		attempts = append(attempts, attempt)
-		if err == nil && status >= 200 && status < 300 {
-			jsonOut(w, 200, map[string]any{
-				"ok": true, "protocol": candidate, "profile": profile,
-				"label": detectedProviderLabel(candidate, profile), "models": in.Models,
-				"latency_ms": time.Since(started).Milliseconds(), "attempts": attempts,
-			})
-			return
+	result := s.detectProviderCapabilitiesWithOptions(r.Context(), in.BaseURL, resolvedAPIKey, in.Models, in.AllowPrivateURL, in.ForceRefresh)
+	jsonOut(w, 200, result)
+}
+
+func (s *Server) streamProviderDetection(w http.ResponseWriter, r *http.Request, baseURL, apiKey string, models []string, allowPrivateURL, forceRefresh bool) {
+	w.Header().Set("content-type", "text/event-stream")
+	w.Header().Set("cache-control", "no-cache")
+	w.Header().Set("x-accel-buffering", "no")
+	w.WriteHeader(http.StatusOK)
+	flusher, _ := w.(http.Flusher)
+	writeEvent := func(event string, value any) {
+		payload, _ := json.Marshal(value)
+		_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, payload)
+		if flusher != nil {
+			flusher.Flush()
 		}
 	}
-	jsonOut(w, 200, map[string]any{"ok": false, "profile": profile, "attempts": attempts, "latency_ms": time.Since(started).Milliseconds()})
+	writeEvent("progress", providerDetectionProgress{Stage: "start", Status: "running", Message: "开始自动检测模型服务"})
+	result := s.detectProviderCapabilitiesWithProgress(r.Context(), baseURL, apiKey, models, allowPrivateURL, forceRefresh, func(progress providerDetectionProgress) {
+		writeEvent("progress", progress)
+	})
+	writeEvent("result", result)
 }
 
 func detectProviderProfile(baseURL string, models []string) string {
-	value := strings.ToLower(baseURL + " " + strings.Join(models, " "))
-	switch {
-	case strings.Contains(value, "qwen"):
-		return "qwen3"
-	case strings.Contains(value, "mimo") || strings.Contains(value, "xiaomi"):
-		return "xiaomi-mimo"
-	default:
-		return "generic"
-	}
+	return providerprofile.DetectProfile(baseURL, models)
 }
 
 func detectedProviderLabel(protocolName ir.Protocol, profile string) string {
@@ -815,7 +772,11 @@ func detectedProviderLabel(protocolName ir.Protocol, profile string) string {
 		return "Qwen 3.x（OpenAI 兼容）"
 	}
 	if profile == "xiaomi-mimo" {
-		return "Xiaomi MiMo（" + string(protocolName) + "）"
+		name := "OpenAI Chat"
+		if protocolName == ir.OpenAIResponses {
+			name = "OpenAI Responses"
+		}
+		return "Xiaomi MiMo（" + name + "）"
 	}
 	switch protocolName {
 	case ir.Anthropic:
@@ -1150,7 +1111,9 @@ func (s *Server) preview(w http.ResponseWriter, r *http.Request) {
 			apiError(w, 422, err)
 			return
 		}
-		upstream, err = providerprofile.PrepareRequest(upstream, target.Provider, request)
+		var policyDiagnostics []ir.Diagnostic
+		upstream, policyDiagnostics, err = providerprofile.PrepareRequest(upstream, target.Provider, request)
+		diagnostics = append(diagnostics, policyDiagnostics...)
 		if err != nil {
 			apiError(w, 422, err)
 			return
@@ -1307,7 +1270,7 @@ func publicProviders(current *config.Config, health map[string]map[string]any, r
 		if redact && apiKey != "" {
 			apiKey = webRedactionMask
 		}
-		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "profile": p.Profile, "protocol": p.Protocol, "base_url": p.BaseURL, "models": p.Models, "api_key_set": p.APIKey != "", "api_key": apiKey, "health": health[p.ID]})
+		out = append(out, map[string]any{"id": p.ID, "name": p.Name, "profile": p.Profile, "protocol": p.Protocol, "codex_integration": p.CodexIntegration, "codex_compatibility": p.CodexCompatibility, "compatibility_mode": p.CompatibilityMode, "tool_choice_mode": p.ToolChoiceMode, "reasoning_history": p.ReasoningHistory, "reasoning_with_tools": p.ReasoningWithTools, "base_url": p.BaseURL, "models": p.Models, "api_key_set": p.APIKey != "", "api_key": apiKey, "request_policy": p.RequestPolicy, "health": health[p.ID]})
 	}
 	return out
 }

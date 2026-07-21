@@ -111,6 +111,13 @@ type RawConfigAdapter interface {
 	ApplyRaw(context.Context, RawConfig) (ApplyResult, error)
 }
 
+// ConfigurationStatusReader reports whether an application's existing local
+// configuration currently points at AI Router. It intentionally avoids CLI or
+// desktop-app detection so status polling remains lightweight.
+type ConfigurationStatusReader interface {
+	ConfigurationSynced(context.Context) (bool, error)
+}
+
 type CleanupAdapter interface {
 	Cleanup(context.Context) (ApplyResult, error)
 }

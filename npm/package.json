@@ -1,6 +1,6 @@
 {
   "name": "airoute-cli",
-  "version": "0.2.4",
+  "version": "0.2.5",
   "description": "Install the AI Router CLI for the current platform",
   "license": "MIT",
   "homepage": "https://github.com/soooooollee/ai-router#readme",

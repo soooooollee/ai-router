@@ -15,7 +15,14 @@ export type Status = {
   runtime_state_persistent?: boolean;
   gateway_url: string;
   providers: number;
+  models?: number;
   routes: number;
+  applications_configured?: number;
+  applications_total?: number;
+  logs?: number;
+  logs_capacity?: number;
+  logging_persist?: boolean;
+  logging_capture_bodies?: boolean;
   provider_health?: Record<
     string,
     { ok: boolean; latency_ms?: number; status?: number; checked_at?: string }
@@ -52,11 +59,24 @@ export type Provider = {
   name: string;
   profile?: string;
   protocol: string;
+  codex_integration?: "direct" | "passthrough" | "compatibility";
+  codex_compatibility?: "full" | "degraded" | "unverified" | "incompatible" | "unavailable";
+  compatibility_mode?: "codex-chat" | "codex-responses";
+  tool_choice_mode?: "standard" | "required" | "auto-only";
+  reasoning_history?: "preserve" | "drop";
+  reasoning_with_tools?: "supported" | "disabled";
   base_url: string;
   models: string[];
   api_key_set: boolean;
   api_key?: string;
-  health?: { ok: boolean; latency_ms?: number; checked_at?: string };
+  request_policy?: { omit_fields?: string[] };
+  health?: {
+    ok: boolean;
+    latency_ms?: number;
+    checked_at?: string;
+    models_ok?: boolean;
+    models_status?: number;
+  };
 };
 export type RouteConfig = {
   id: string;

@@ -11,12 +11,7 @@ test("deleting a provider also removes route references", async ({ page }) => {
   await expect(page.getByText("Mock Provider", { exact: true })).toHaveCount(0);
   await page.getByRole("button", { name: "路由配置" }).click();
   await expect(page.getByText("fast", { exact: true })).toHaveCount(0);
-
-  await page.getByRole("button", { name: "应用配置" }).click();
-  const emptyRouteNotice = page.getByText(
-    "请先在“路由配置”中至少创建一条精确模型路由。",
-  );
-  await expect(emptyRouteNotice).toBeVisible();
-  await expect(emptyRouteNotice).toHaveCSS("font-size", "13px");
-  await expect(emptyRouteNotice).toHaveCSS("font-weight", "600");
+  await expect(
+    page.locator(".table-route-name").getByText("secondary-model", { exact: true }),
+  ).toHaveCount(4);
 });

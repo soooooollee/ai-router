@@ -275,6 +275,21 @@ func (a *Adapter) Read(ctx context.Context) (application.State, error) {
 	}, nil
 }
 
+func (a *Adapter) ConfigurationSynced(_ context.Context) (bool, error) {
+	path, err := a.path()
+	if err != nil {
+		return false, err
+	}
+	document, _, err := readDocument(path)
+	if err != nil {
+		return false, err
+	}
+	state := managed(document)
+	baseURL, _ := state["base_url"].(string)
+	model, _ := state["model"].(string)
+	return strings.TrimSpace(baseURL) != "" && strings.TrimSpace(model) != "", nil
+}
+
 func (a *Adapter) Preview(_ context.Context, raw json.RawMessage) (application.Preview, error) {
 	path, document, current, next, _, err := a.compose(raw)
 	if err != nil {

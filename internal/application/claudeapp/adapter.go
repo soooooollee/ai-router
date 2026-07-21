@@ -210,6 +210,29 @@ func (a *Adapter) Read(ctx context.Context) (application.State, error) {
 	return application.State{Manifest: a.Manifest(), Detection: detection, Path: library, Exists: len(bytes.TrimSpace(raw)) > 0, Managed: managed, PreservedFields: 0, Synced: config.InferenceProvider == "gateway" && d.BaseURL != "" && d.Model != ""}, nil
 }
 
+func (a *Adapter) ConfigurationSynced(_ context.Context) (bool, error) {
+	_, _, library, statePath, err := a.paths()
+	if err != nil {
+		return false, err
+	}
+	_, raw, err := readObject(library)
+	if err != nil {
+		return false, err
+	}
+	var config gatewayConfig
+	if len(raw) > 0 {
+		_ = json.Unmarshal(raw, &config)
+	}
+	desired := desiredFromGateway(config)
+	if stateRaw, readErr := os.ReadFile(statePath); readErr == nil {
+		var bundle stateBundle
+		if json.Unmarshal(stateRaw, &bundle) == nil && bundle.Version == 1 && bundle.Desired.Model != "" {
+			desired = bundle.Desired
+		}
+	}
+	return config.InferenceProvider == "gateway" && desired.BaseURL != "" && desired.Model != "", nil
+}
+
 func decodeDesired(raw json.RawMessage) (DesiredConfig, error) {
 	var desired DesiredConfig
 	if err := json.Unmarshal(raw, &desired); err != nil {

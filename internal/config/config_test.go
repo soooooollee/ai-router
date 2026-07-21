@@ -3,7 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
+
+	"github.com/zbss/airoute/internal/protocol/ir"
 )
 
 func TestLoadAndValidate(t *testing.T) {
@@ -66,6 +69,75 @@ func TestUnknownFieldRejected(t *testing.T) {
 	_ = os.WriteFile(p, []byte("version: 1\nunknown: true\n"), 0600)
 	if _, err := Load(p); err == nil {
 		t.Fatal("expected unknown field error")
+	}
+}
+
+func TestProviderRequestPolicyLoadsAndValidates(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := `version: 1
+providers:
+  - id: p
+    protocol: openai-chat
+    base_url: https://example.com/v1
+    models: [m]
+    compatibility_mode: codex-chat
+    request_policy:
+      omit_fields: [reasoning_effort]
+default_route:
+  targets: [{provider: p, model: m}]
+`
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(c.Providers[0].RequestPolicy.OmitFields) != 1 || c.Providers[0].RequestPolicy.OmitFields[0] != "reasoning_effort" {
+		t.Fatalf("request policy was not loaded: %#v", c.Providers[0].RequestPolicy)
+	}
+	if c.Providers[0].CompatibilityMode != "codex-chat" {
+		t.Fatalf("compatibility mode was not loaded: %#v", c.Providers[0])
+	}
+}
+
+func TestCodexChatCompatibilityRequiresOpenAIChat(t *testing.T) {
+	c := &Config{Server: Server{Listen: "127.0.0.1:12666", AdminListen: "127.0.0.1:12667"}, Conversion: Conversion{UnsupportedFields: "warn", RemoteImagePolicy: "pass-through"}, Providers: []Provider{{
+		ID: "p", Protocol: ir.OpenAIResponses, BaseURL: "https://example.com/v1", Models: []string{"m"}, CompatibilityMode: "codex-chat",
+	}}}
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "requires protocol openai-chat") {
+		t.Fatalf("expected compatibility validation error, got %v", err)
+	}
+}
+
+func TestCodexResponsesCompatibilityAndDetectionPoliciesValidate(t *testing.T) {
+	c := &Config{Server: Server{Listen: "127.0.0.1:12666", AdminListen: "127.0.0.1:12667"}, Conversion: Conversion{UnsupportedFields: "warn", RemoteImagePolicy: "pass-through"}, Providers: []Provider{{
+		ID: "p", Protocol: ir.OpenAIResponses, BaseURL: "https://example.com/v1", APIKey: "key", Models: []string{"m"},
+		CodexCompatibility: "degraded", CompatibilityMode: "codex-responses", ToolChoiceMode: "auto-only", ReasoningHistory: "preserve", ReasoningWithTools: "disabled",
+	}}}
+	if err := c.Validate(); err != nil {
+		t.Fatalf("valid detected provider policies were rejected: %v", err)
+	}
+	c.Providers[0].CodexCompatibility = "maybe"
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "codex_compatibility") {
+		t.Fatalf("invalid Codex compatibility status was accepted: %v", err)
+	}
+	c.Providers[0].Protocol = ir.OpenAIChat
+	if err := c.Validate(); err == nil || !strings.Contains(err.Error(), "requires protocol openai-responses") {
+		t.Fatalf("codex-responses should require OpenAI Responses, got %v", err)
+	}
+}
+
+func TestCodexDirectIntegrationRequiresResponses(t *testing.T) {
+	valid := &Config{Server: Server{Listen: "127.0.0.1:12666", AdminListen: "127.0.0.1:12667"}, Conversion: Conversion{UnsupportedFields: "warn", RemoteImagePolicy: "pass-through"}, Providers: []Provider{{
+		ID: "p", Protocol: ir.OpenAIResponses, CodexIntegration: "direct", BaseURL: "https://example.com/v1", Models: []string{"m"},
+	}}}
+	if err := valid.Validate(); err != nil {
+		t.Fatalf("valid Codex direct provider was rejected: %v", err)
+	}
+	valid.Providers[0].Protocol = ir.OpenAIChat
+	if err := valid.Validate(); err == nil || !strings.Contains(err.Error(), "direct requires protocol openai-responses") {
+		t.Fatalf("invalid Codex direct provider was accepted: %v", err)
 	}
 }
 

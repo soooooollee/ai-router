@@ -1,14 +1,21 @@
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
-test("overview presents the classic summary with compact styling", async ({
+test("overview presents configuration and classic runtime summaries", async ({
   page,
 }) => {
   await login(page);
   await page.getByRole("button", { name: "运行概览" }).click();
 
   await expect(page.getByRole("heading", { name: "运行概览" })).toBeVisible();
-  await expect(page.getByText(/实时请求、Token 消耗和链路性能/)).toBeVisible();
+  await expect(page.getByText(/模型、路由、应用、日志/)).toBeVisible();
+  await expect(page.getByText("模型数量", { exact: true })).toBeVisible();
+  await expect(page.getByText("路由数量", { exact: true })).toBeVisible();
+  await expect(page.getByText("已配置应用", { exact: true })).toBeVisible();
+  await expect(page.getByText("日志数量", { exact: true })).toBeVisible();
+  await expect(page.getByText("日志持久化", { exact: true })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "配置概览" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "请求与性能" })).toHaveCount(0);
   await expect(page.getByText("累计请求", { exact: true })).toBeVisible();
   await expect(page.getByText("成功率", { exact: true })).toBeVisible();
   await expect(page.getByText("P95 延迟", { exact: true })).toBeVisible();

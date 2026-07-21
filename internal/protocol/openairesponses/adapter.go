@@ -42,6 +42,11 @@ func (*Adapter) DecodeRequest(_ context.Context, raw json.RawMessage) (*ir.Reque
 				r.Messages = appendCall(r.Messages, ir.ContentBlock{Type: "tool_call", ID: first(common.String(m["call_id"]), common.String(m["id"])), Name: common.String(m["name"]), Arguments: json.RawMessage(common.String(m["arguments"]))})
 			case "function_call_output":
 				r.Messages = append(r.Messages, ir.Message{Role: "tool", Content: []ir.ContentBlock{{Type: "tool_result", ID: common.String(m["call_id"]), Result: common.Raw(m["output"])}}})
+			case "custom_tool_call":
+				arguments, _ := json.Marshal(map[string]any{"input": m["input"]})
+				r.Messages = appendCall(r.Messages, ir.ContentBlock{Type: "tool_call", SourceType: "custom", ID: first(common.String(m["call_id"]), common.String(m["id"])), Name: common.String(m["name"]), Arguments: arguments})
+			case "custom_tool_call_output":
+				r.Messages = append(r.Messages, ir.Message{Role: "tool", Content: []ir.ContentBlock{{Type: "tool_result", SourceType: "custom", ID: common.String(m["call_id"]), Result: common.Raw(m["output"])}}})
 			case "reasoning":
 				msg := ir.Message{Role: "assistant"}
 				for _, summary := range common.Array(m["summary"]) {
@@ -54,8 +59,11 @@ func (*Adapter) DecodeRequest(_ context.Context, raw json.RawMessage) (*ir.Reque
 	}
 	for _, x := range common.Array(v["tools"]) {
 		t := common.Map(x)
-		if common.String(t["type"]) == "function" {
-			r.Tools = append(r.Tools, ir.Tool{Name: common.String(t["name"]), Description: common.String(t["description"]), InputSchema: common.Raw(t["parameters"])})
+		switch common.String(t["type"]) {
+		case "function":
+			r.Tools = append(r.Tools, ir.Tool{Type: "function", Name: common.String(t["name"]), Description: common.String(t["description"]), InputSchema: common.Raw(t["parameters"])})
+		case "custom":
+			r.Tools = append(r.Tools, ir.Tool{Type: "custom", Name: common.String(t["name"]), Description: customToolDescription(t), InputSchema: customToolInputSchema(), Extension: common.Raw(t)})
 		}
 	}
 	if tc := v["tool_choice"]; tc != nil {
@@ -126,13 +134,21 @@ func (*Adapter) EncodeRequest(_ context.Context, r *ir.Request) (json.RawMessage
 			case "refusal":
 				content = append(content, map[string]any{"type": "input_text", "text": b.Text})
 			case "tool_call":
-				input = append(input, map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments)})
+				if b.SourceType == "custom" {
+					input = append(input, map[string]any{"type": "custom_tool_call", "call_id": b.ID, "name": b.Name, "input": customToolInput(b.Arguments)})
+				} else {
+					input = append(input, map[string]any{"type": "function_call", "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments)})
+				}
 			case "tool_result":
 				var out any
 				if json.Unmarshal(b.Result, &out) != nil {
 					out = string(b.Result)
 				}
-				input = append(input, map[string]any{"type": "function_call_output", "call_id": b.ID, "output": out})
+				typeName := "function_call_output"
+				if b.SourceType == "custom" {
+					typeName = "custom_tool_call_output"
+				}
+				input = append(input, map[string]any{"type": typeName, "call_id": b.ID, "output": out})
 			case "reasoning":
 				item := map[string]any{"type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": b.Text}}}
 				mergeReasoningOpaque(item, b.Extension)
@@ -147,6 +163,17 @@ func (*Adapter) EncodeRequest(_ context.Context, r *ir.Request) (json.RawMessage
 	if len(r.Tools) > 0 {
 		var tools []any
 		for _, t := range r.Tools {
+			if t.Type == "custom" {
+				var custom map[string]any
+				_ = json.Unmarshal(t.Extension, &custom)
+				if custom == nil {
+					custom = map[string]any{"type": "custom", "name": t.Name, "description": t.Description}
+				}
+				custom["type"] = "custom"
+				custom["name"] = t.Name
+				tools = append(tools, custom)
+				continue
+			}
 			var schema any
 			_ = json.Unmarshal(t.InputSchema, &schema)
 			tools = append(tools, map[string]any{"type": "function", "name": t.Name, "description": t.Description, "parameters": schema})
@@ -219,7 +246,11 @@ func (*Adapter) EncodeResponse(_ context.Context, r *ir.Response) (json.RawMessa
 		case "text":
 			text = append(text, map[string]any{"type": "output_text", "text": b.Text, "annotations": []any{}})
 		case "tool_call":
-			output = append(output, map[string]any{"type": "function_call", "id": "fc_" + b.ID, "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments), "status": "completed"})
+			if b.SourceType == "custom" {
+				output = append(output, customToolCallItem(b, "completed"))
+			} else {
+				output = append(output, map[string]any{"type": "function_call", "id": "fc_" + b.ID, "call_id": b.ID, "name": b.Name, "arguments": string(b.Arguments), "status": "completed"})
+			}
 		case "reasoning":
 			item := map[string]any{"type": "reasoning", "summary": []any{map[string]any{"type": "summary_text", "text": b.Text}}, "status": "completed"}
 			mergeReasoningOpaque(item, b.Extension)
@@ -317,8 +348,17 @@ func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE
 		if e.Block == nil {
 			return nil, nil, nil
 		}
-		chunks = append(chunks, chunk("response.output_item.added", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": map[string]any{"id": itemID("fc"), "type": "function_call", "status": "in_progress", "call_id": e.Block.ID, "name": e.Block.Name, "arguments": ""}}))
+		if e.Block.SourceType == "custom" {
+			item := customToolCallItem(*e.Block, "in_progress")
+			item["id"] = itemID("ctc")
+			chunks = append(chunks, chunk("response.output_item.added", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}))
+		} else {
+			chunks = append(chunks, chunk("response.output_item.added", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": map[string]any{"id": itemID("fc"), "type": "function_call", "status": "in_progress", "call_id": e.Block.ID, "name": e.Block.Name, "arguments": ""}}))
+		}
 	case "tool_call.arguments.delta":
+		if e.Block != nil && e.Block.SourceType == "custom" {
+			return nil, nil, nil
+		}
 		chunks = append(chunks, chunk("response.function_call_arguments.delta", map[string]any{"response_id": e.ResponseID, "item_id": itemID("fc"), "output_index": e.Index, "delta": e.Arguments}))
 	case "content.end":
 		if e.Block == nil {
@@ -344,13 +384,27 @@ func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE
 				chunk("response.output_item.done", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}),
 			)
 		case "tool_call":
-			id := itemID("fc")
-			arguments := string(e.Block.Arguments)
-			item := map[string]any{"id": id, "type": "function_call", "status": "completed", "call_id": e.Block.ID, "name": e.Block.Name, "arguments": arguments}
-			chunks = append(chunks,
-				chunk("response.function_call_arguments.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "name": e.Block.Name, "arguments": arguments}),
-				chunk("response.output_item.done", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}),
-			)
+			if e.Block.SourceType == "custom" {
+				id := itemID("ctc")
+				input := customToolInput(e.Block.Arguments)
+				item := customToolCallItem(*e.Block, "completed")
+				item["id"] = id
+				if input != "" {
+					chunks = append(chunks, chunk("response.custom_tool_call_input.delta", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "delta": input}))
+				}
+				chunks = append(chunks,
+					chunk("response.custom_tool_call_input.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "input": input}),
+					chunk("response.output_item.done", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}),
+				)
+			} else {
+				id := itemID("fc")
+				arguments := string(e.Block.Arguments)
+				item := map[string]any{"id": id, "type": "function_call", "status": "completed", "call_id": e.Block.ID, "name": e.Block.Name, "arguments": arguments}
+				chunks = append(chunks,
+					chunk("response.function_call_arguments.done", map[string]any{"response_id": e.ResponseID, "item_id": id, "output_index": e.Index, "name": e.Block.Name, "arguments": arguments}),
+					chunk("response.output_item.done", map[string]any{"response_id": e.ResponseID, "output_index": e.Index, "item": item}),
+				)
+			}
 		}
 	case "response.end":
 		response := map[string]any{"id": e.ResponseID, "object": "response", "status": "completed", "model": e.Model, "output": []any{}}
@@ -380,6 +434,45 @@ func first(v ...string) string {
 		}
 	}
 	return ""
+}
+
+func customToolInputSchema() json.RawMessage {
+	return common.Raw(map[string]any{
+		"type":                 "object",
+		"properties":           map[string]any{"input": map[string]any{"type": "string", "description": "Raw input for the custom tool."}},
+		"required":             []string{"input"},
+		"additionalProperties": false,
+	})
+}
+
+func customToolDescription(tool map[string]any) string {
+	description := common.String(tool["description"])
+	raw, _ := json.Marshal(tool)
+	if description != "" {
+		description += "\n\n"
+	}
+	return description + "Original custom tool definition:\n" + string(raw)
+}
+
+func customToolInput(arguments json.RawMessage) string {
+	var value map[string]any
+	if json.Unmarshal(arguments, &value) == nil {
+		if input, ok := value["input"].(string); ok {
+			return input
+		}
+	}
+	return string(arguments)
+}
+
+func customToolCallItem(block ir.ContentBlock, status string) map[string]any {
+	return map[string]any{
+		"id":      "ctc_" + block.ID,
+		"type":    "custom_tool_call",
+		"status":  status,
+		"call_id": block.ID,
+		"name":    block.Name,
+		"input":   customToolInput(block.Arguments),
+	}
 }
 
 func mergeReasoningOpaque(item map[string]any, extension json.RawMessage) {

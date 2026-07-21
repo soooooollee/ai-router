@@ -153,6 +153,21 @@ func (a *Adapter) Read(ctx context.Context) (application.State, error) {
 	}, nil
 }
 
+func (a *Adapter) ConfigurationSynced(_ context.Context) (bool, error) {
+	path, err := a.path()
+	if err != nil {
+		return false, err
+	}
+	settings, _, err := readSettings(path)
+	if err != nil {
+		return false, err
+	}
+	managed := managedState(settings)
+	baseURL, _ := managed["ANTHROPIC_BASE_URL"].(string)
+	model, _ := managed["ANTHROPIC_MODEL"].(string)
+	return baseURL != "" && model != "", nil
+}
+
 func decodeDesired(raw json.RawMessage) (DesiredConfig, error) {
 	var desired DesiredConfig
 	if err := json.Unmarshal(raw, &desired); err != nil {

@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -72,6 +73,37 @@ func TestInitConfigCreatesSecureValidConfiguration(t *testing.T) {
 	}
 	if err = initConfig([]string{"--config", path}); err == nil {
 		t.Fatal("expected existing configuration to be preserved")
+	}
+}
+
+func TestProviderTokenPrintsOnlySelectedCredential(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "airoute.yaml")
+	raw := `version: 1
+providers:
+  - id: native
+    protocol: openai-responses
+    codex_integration: direct
+    base_url: https://example.com/v1
+    api_key: upstream-secret
+    models: [gpt-native]
+routes: []
+`
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	reader, writer, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = writer
+	runErr := providerToken([]string{"--config", path, "--provider", "native"})
+	_ = writer.Close()
+	os.Stdout = original
+	output, readErr := io.ReadAll(reader)
+	_ = reader.Close()
+	if runErr != nil || readErr != nil || strings.TrimSpace(string(output)) != "upstream-secret" {
+		t.Fatalf("provider-token output=%q runErr=%v readErr=%v", output, runErr, readErr)
 	}
 }
 func waitFor(t *testing.T, ok func() bool) {

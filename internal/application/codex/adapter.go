@@ -14,30 +14,42 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/pelletier/go-toml/v2"
 	"github.com/zbss/airoute/internal/application"
+	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/safefile"
 )
 
 const backupMarker = ".airoute.bak."
 const catalogName = "airoute-model-catalog.json"
 const backupBundleFormat = "airoute.codex.backup.v1"
+const managedBlockStart = "# >>> AI Router managed configuration (airoute.codex.v1)"
+const managedBlockEnd = "# <<< AI Router managed configuration"
 
 type DesiredConfig struct {
-	BaseURL string   `json:"base_url"`
-	APIKey  string   `json:"api_key"`
-	Model   string   `json:"model"`
-	Models  []string `json:"models,omitempty"`
+	BaseURL          string   `json:"base_url"`
+	APIKey           string   `json:"api_key"`
+	Model            string   `json:"model"`
+	Models           []string `json:"models,omitempty"`
+	IntegrationMode  string   `json:"integration_mode,omitempty"`
+	ProviderID       string   `json:"provider_id,omitempty"`
+	ProviderName     string   `json:"provider_name,omitempty"`
+	ProviderBaseURL  string   `json:"provider_base_url,omitempty"`
+	ProviderModel    string   `json:"provider_model,omitempty"`
+	AirExecutable    string   `json:"-"`
+	RouterConfigPath string   `json:"-"`
 }
 
 type Adapter struct {
 	ConfigPath         string
+	RouterConfigPath   string
+	AirExecutable      string
 	HTTPClient         *http.Client
 	LookPath           func(string) (string, error)
 	DesktopExecutables []string
-	desktop            bool
 }
 
 type fileSnapshot struct {
@@ -55,18 +67,8 @@ func New() *Adapter {
 	return &Adapter{HTTPClient: &http.Client{Timeout: 60 * time.Second}, LookPath: exec.LookPath}
 }
 
-func NewDesktop() *Adapter {
-	a := New()
-	a.desktop = true
-	return a
-}
-
 func (a *Adapter) Manifest() application.Manifest {
-	id, name, description := "codex", "Codex CLI", "OpenAI 命令行编码助手"
-	if a.desktop {
-		id, name, description = "chatgpt-app", "ChatGPT App", "ChatGPT 桌面端中的 Codex 编码工作区"
-	}
-	return application.Manifest{ID: id, Name: name, Description: description, Status: "available", Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback, application.CapabilityCleanup, application.CapabilityEdit}, ConfigFormat: "toml"}
+	return application.Manifest{ID: "codex", Name: "Codex CLI / ChatGPT App", Description: "Codex CLI 与 ChatGPT App 的共享配置", Status: "available", Capabilities: []application.Capability{application.CapabilityDetect, application.CapabilityConfigure, application.CapabilityPreview, application.CapabilityVerify, application.CapabilityRollback, application.CapabilityCleanup, application.CapabilityEdit}, ConfigFormat: "toml"}
 }
 
 func (a *Adapter) path() (string, error) {
@@ -87,11 +89,19 @@ func (a *Adapter) path() (string, error) {
 }
 
 func (a *Adapter) executable() (string, error) {
-	if a.desktop {
-		return a.desktopExecutable()
+	path, err := a.cliExecutable()
+	if err == nil {
+		return path, nil
 	}
+	return a.desktopExecutable()
+}
+
+func (a *Adapter) cliExecutable() (string, error) {
 	if value := strings.TrimSpace(os.Getenv("AIROUTE_CODEX_EXECUTABLE")); value != "" {
-		return value, nil
+		if !isDesktopExecutable(value) {
+			return value, nil
+		}
+		return "", exec.ErrNotFound
 	}
 	lookPath := a.LookPath
 	if lookPath == nil {
@@ -167,36 +177,77 @@ func isDesktopExecutable(path string) bool {
 }
 
 func (a *Adapter) Detect(ctx context.Context) (application.Detection, error) {
-	path, err := a.executable()
-	if err != nil {
-		message := "未检测到 Codex CLI 命令"
-		if a.desktop {
-			message = "未检测到 ChatGPT App"
-		}
-		return application.Detection{Installed: false, Message: message}, nil
+	cliPath, _ := a.cliExecutable()
+	desktopPath, _ := a.desktopExecutable()
+	var cli executableDetection
+	var desktop executableDetection
+	var group sync.WaitGroup
+	if cliPath != "" {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			cli = detectExecutable(ctx, cliPath)
+		}()
 	}
+	if desktopPath != "" {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			desktop = detectExecutable(ctx, desktopPath)
+		}()
+	}
+	group.Wait()
+
+	message := "未检测到 Codex CLI 或 ChatGPT App"
+	switch {
+	case cli.installed && desktop.installed:
+		message = "Codex CLI 与 ChatGPT App 已安装，共享同一配置"
+	case cli.installed:
+		message = "Codex CLI 已安装；ChatGPT App 未检测到，仍使用同一配置入口"
+	case desktop.installed:
+		message = "ChatGPT App 已安装；Codex CLI 未检测到，仍使用同一配置入口"
+	case cli.timedOut || desktop.timedOut:
+		message = "Codex CLI 或 ChatGPT App 响应超时"
+	case cli.path != "" || desktop.path != "":
+		message = "检测到 Codex CLI 或 ChatGPT App，但 Codex 无法正常运行"
+	}
+	versions := make([]string, 0, 2)
+	for _, version := range []string{cli.version, desktop.version} {
+		if version != "" && (len(versions) == 0 || versions[0] != version) {
+			versions = append(versions, version)
+		}
+	}
+	executable := cli.path
+	if executable == "" {
+		executable = desktop.path
+	}
+	return application.Detection{
+		Installed:  cli.installed || desktop.installed,
+		Executable: executable,
+		Version:    strings.Join(versions, " / "),
+		Message:    message,
+	}, nil
+}
+
+type executableDetection struct {
+	path      string
+	version   string
+	installed bool
+	timedOut  bool
+}
+
+func detectExecutable(ctx context.Context, path string) executableDetection {
+	result := executableDetection{path: path}
 	checkCtx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	output, commandErr := exec.CommandContext(checkCtx, path, "--version").CombinedOutput()
 	if commandErr != nil {
-		message := "检测到 Codex CLI 命令，但无法正常运行"
-		if a.desktop {
-			message = "已检测到 ChatGPT App，但内置 Codex 无法正常运行"
-		}
-		if errors.Is(checkCtx.Err(), context.DeadlineExceeded) {
-			message = "Codex CLI 命令响应超时"
-			if a.desktop {
-				message = "ChatGPT App 内置 Codex 响应超时"
-			}
-		}
-		return application.Detection{Installed: false, Executable: path, Message: message}, nil
+		result.timedOut = errors.Is(checkCtx.Err(), context.DeadlineExceeded)
+		return result
 	}
-	version := strings.TrimSpace(string(output))
-	message := "Codex CLI 已安装"
-	if a.desktop {
-		message = "ChatGPT App 已安装（包含 Codex）"
-	}
-	return application.Detection{Installed: true, Executable: path, Version: version, Message: message}, nil
+	result.installed = true
+	result.version = strings.TrimSpace(string(output))
+	return result
 }
 
 func read(path string) ([]byte, error) {
@@ -218,6 +269,26 @@ func decodeDesired(raw json.RawMessage) (DesiredConfig, error) {
 	}
 	desired.APIKey = strings.TrimSpace(desired.APIKey)
 	desired.Model = strings.TrimSpace(desired.Model)
+	desired.IntegrationMode = strings.TrimSpace(desired.IntegrationMode)
+	if desired.IntegrationMode == "" {
+		desired.IntegrationMode = "compatibility"
+	}
+	if desired.IntegrationMode != "direct" && desired.IntegrationMode != "passthrough" && desired.IntegrationMode != "compatibility" {
+		return desired, errors.New("Codex 接入模式必须是 direct、passthrough 或 compatibility")
+	}
+	desired.ProviderID = strings.TrimSpace(desired.ProviderID)
+	desired.ProviderName = strings.TrimSpace(desired.ProviderName)
+	desired.ProviderBaseURL = strings.TrimRight(strings.TrimSpace(desired.ProviderBaseURL), "/")
+	if desired.ProviderBaseURL != "" && !strings.HasSuffix(desired.ProviderBaseURL, "/v1") {
+		desired.ProviderBaseURL += "/v1"
+	}
+	desired.ProviderModel = strings.TrimSpace(desired.ProviderModel)
+	if desired.IntegrationMode == "direct" {
+		if desired.ProviderID == "" || desired.ProviderBaseURL == "" || desired.ProviderModel == "" {
+			return desired, errors.New("官方直连需要唯一的上游 Provider、API 地址和模型")
+		}
+		return desired, nil
+	}
 	if desired.BaseURL == "/v1" || desired.Model == "" {
 		return desired, errors.New("网关地址和默认模型为必填项")
 	}
@@ -260,7 +331,7 @@ func managed(raw []byte) map[string]any {
 		if section == "" && key == "model_catalog_json" {
 			result["model_catalog_json"] = parseString(trimmed)
 		}
-		if section == "[model_providers.airoute]" {
+		if section == "[model_providers.airoute]" || section == "[model_providers.airoute-direct]" {
 			switch key {
 			case "base_url":
 				result["base_url"] = parseString(trimmed)
@@ -277,11 +348,23 @@ func stripManaged(current []byte) []byte {
 	out := make([]string, 0, len(lines))
 	section := ""
 	skippingAiroute := false
+	skippingOwnedBlock := false
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if trimmed == managedBlockStart {
+			skippingOwnedBlock = true
+			continue
+		}
+		if skippingOwnedBlock {
+			if trimmed == managedBlockEnd {
+				skippingOwnedBlock = false
+			}
+			continue
+		}
 		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
 			section = trimmed
-			skippingAiroute = section == "[model_providers.airoute]" || strings.HasPrefix(section, "[model_providers.airoute.")
+			skippingAiroute = section == "[model_providers.airoute]" || strings.HasPrefix(section, "[model_providers.airoute.") ||
+				section == "[model_providers.airoute-direct]" || strings.HasPrefix(section, "[model_providers.airoute-direct.")
 			if skippingAiroute {
 				continue
 			}
@@ -298,29 +381,250 @@ func stripManaged(current []byte) []byte {
 	return []byte(strings.TrimSpace(strings.Join(out, "\n")))
 }
 
+func sectionHasAnyKey(lines []string, target string, keys ...string) bool {
+	section := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = trimmed
+			continue
+		}
+		if section != target {
+			continue
+		}
+		key := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[0])
+		for _, candidate := range keys {
+			if key == candidate {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func replaceTOMLKey(line, oldKey, newKey string) string {
+	index := strings.Index(line, oldKey)
+	if index < 0 {
+		return line
+	}
+	return line[:index] + newKey + line[index+len(oldKey):]
+}
+
+func isGeneratedOrphanCodexAppsSection(lines []string) bool {
+	const target = "[mcp_servers.codex_apps]"
+	section := ""
+	assignments := make([]string, 0, 1)
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = trimmed
+			continue
+		}
+		if section != target || trimmed == "" || strings.HasPrefix(trimmed, "#") || !strings.Contains(trimmed, "=") {
+			continue
+		}
+		assignments = append(assignments, strings.Join(strings.Fields(trimmed), " "))
+	}
+	return len(assignments) == 1 && assignments[0] == "startup_timeout_sec = 120"
+}
+
+func normalizeCodexRuntimeSettings(current []byte) []byte {
+	lines := strings.Split(string(current), "\n")
+	const featuresSection = "[features]"
+	const codexAppsSection = "[mcp_servers.codex_apps]"
+	hasHooks := sectionHasAnyKey(lines, featuresSection, "hooks")
+	removeOrphanCodexApps := isGeneratedOrphanCodexAppsSection(lines)
+
+	out := make([]string, 0, len(lines))
+	section := ""
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = trimmed
+		}
+		if removeOrphanCodexApps && section == codexAppsSection {
+			continue
+		}
+		key := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[0])
+		if section == featuresSection && key == "codex_hooks" {
+			if hasHooks {
+				continue
+			}
+			line = replaceTOMLKey(line, "codex_hooks", "hooks")
+			hasHooks = true
+		}
+		out = append(out, line)
+	}
+	return []byte(strings.TrimSpace(strings.Join(out, "\n")))
+}
+
 func merge(current []byte, desired DesiredConfig, catalogPath string) []byte {
-	body := string(stripManaged(current))
-	managedBlock := strings.Join([]string{
-		"model = " + tomlString(desired.Model),
-		"model_provider = \"airoute\"",
+	body := string(stripManaged(normalizeCodexRuntimeSettings(current)))
+	providerID := "airoute"
+	model := desired.Model
+	if desired.IntegrationMode == "direct" {
+		providerID = "airoute-direct"
+		model = desired.ProviderModel
+	}
+	managedRoot := strings.Join([]string{
+		managedBlockStart,
+		"model = " + tomlString(model),
+		"model_provider = " + tomlString(providerID),
 		"model_catalog_json = " + tomlString(catalogPath),
 		"model_reasoning_effort = \"high\"",
 		"model_supports_reasoning_summaries = true",
 		"model_reasoning_summary = \"none\"",
-		"model_context_window = " + strconv.Itoa(modelContextWindow(desired.Model)),
+		"model_context_window = " + strconv.Itoa(modelContextWindow(model)),
 		"web_search = \"disabled\"",
-		"",
-		"[model_providers.airoute]",
-		"name = \"AI Router\"",
-		"base_url = " + tomlString(desired.BaseURL),
-		"wire_api = \"responses\"",
-		"requires_openai_auth = false",
-		"experimental_bearer_token = " + tomlString(desired.APIKey),
+		managedBlockEnd,
 	}, "\n")
-	if body == "" {
-		return []byte(managedBlock + "\n")
+	var providerLines []string
+	if desired.IntegrationMode == "direct" {
+		name := desired.ProviderName
+		if name == "" {
+			name = desired.ProviderID
+		}
+		providerLines = []string{
+			managedBlockStart,
+			"[model_providers.airoute-direct]",
+			"name = " + tomlString(name+"（Codex 官方直连）"),
+			"base_url = " + tomlString(desired.ProviderBaseURL),
+			"wire_api = \"responses\"",
+			"",
+			"[model_providers.airoute-direct.auth]",
+			"command = " + tomlString(desired.AirExecutable),
+			"args = [" + tomlString("provider-token") + ", " + tomlString("--config") + ", " + tomlString(desired.RouterConfigPath) + ", " + tomlString("--provider") + ", " + tomlString(desired.ProviderID) + "]",
+			managedBlockEnd,
+		}
+	} else {
+		providerLines = []string{
+			managedBlockStart,
+			"[model_providers.airoute]",
+			"name = \"AI Router\"",
+			"base_url = " + tomlString(desired.BaseURL),
+			"wire_api = \"responses\"",
+			"requires_openai_auth = false",
+			"experimental_bearer_token = " + tomlString(desired.APIKey),
+			managedBlockEnd,
+		}
 	}
-	return []byte(managedBlock + "\n\n" + body + "\n")
+	managedProvider := strings.Join(providerLines, "\n")
+	if body == "" {
+		return []byte(managedRoot + "\n\n" + managedProvider + "\n")
+	}
+	return []byte(managedRoot + "\n\n" + body + "\n\n" + managedProvider + "\n")
+}
+
+func validateCodexConfig(raw []byte) error {
+	var document map[string]any
+	if err := toml.Unmarshal(raw, &document); err != nil {
+		return fmt.Errorf("Codex 配置不是有效 TOML: %w", err)
+	}
+	providers, _ := document["model_providers"].(map[string]any)
+	for _, providerID := range []string{"airoute", "airoute-direct"} {
+		airoute, _ := providers[providerID].(map[string]any)
+		if airoute == nil || !bytes.Contains(raw, []byte(managedBlockStart)) {
+			continue
+		}
+		baseURL, _ := airoute["base_url"].(string)
+		wireAPI, _ := airoute["wire_api"].(string)
+		if strings.TrimSpace(baseURL) == "" || wireAPI != "responses" {
+			return errors.New("AI Router Codex provider 缺少有效的 base_url 或 responses wire_api")
+		}
+	}
+	mcpServers, _ := document["mcp_servers"].(map[string]any)
+	for name, value := range mcpServers {
+		server, ok := value.(map[string]any)
+		if !ok {
+			return fmt.Errorf("mcp_servers.%s 不是有效的 MCP 配置", name)
+		}
+		command, hasCommand := nonEmptyString(server["command"])
+		urlValue, hasURL := nonEmptyString(server["url"])
+		if !hasCommand && !hasURL {
+			return fmt.Errorf("mcp_servers.%s 缺少 transport：必须设置 command 或 url", name)
+		}
+		if hasCommand && hasURL {
+			return fmt.Errorf("mcp_servers.%s transport 冲突：command 与 url 不能同时设置", name)
+		}
+		_ = command
+		_ = urlValue
+	}
+	return nil
+}
+
+func replaceManagedCatalogPath(raw []byte, path string) []byte {
+	lines := strings.Split(string(raw), "\n")
+	section := ""
+	for index, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if strings.HasPrefix(trimmed, "[") && strings.HasSuffix(trimmed, "]") {
+			section = trimmed
+		}
+		key := strings.TrimSpace(strings.SplitN(trimmed, "=", 2)[0])
+		if section == "" && key == "model_catalog_json" {
+			indent := line[:len(line)-len(strings.TrimLeft(line, " \t"))]
+			lines[index] = indent + "model_catalog_json = " + tomlString(path)
+			break
+		}
+	}
+	return []byte(strings.Join(lines, "\n"))
+}
+
+func envWithOverride(name, value string) []string {
+	prefix := name + "="
+	environment := make([]string, 0, len(os.Environ())+1)
+	for _, item := range os.Environ() {
+		if !strings.HasPrefix(item, prefix) {
+			environment = append(environment, item)
+		}
+	}
+	return append(environment, prefix+value)
+}
+
+func (a *Adapter) preflightWithCodex(ctx context.Context, configRaw, catalogRaw []byte) error {
+	executable, err := a.executable()
+	if err != nil {
+		return nil
+	}
+	directory, err := os.MkdirTemp("", "airoute-codex-preflight-")
+	if err != nil {
+		return err
+	}
+	defer os.RemoveAll(directory)
+	catalogPath := filepath.Join(directory, catalogName)
+	configPath := filepath.Join(directory, "config.toml")
+	stagedConfig := replaceManagedCatalogPath(configRaw, catalogPath)
+	if err = safefile.AtomicWrite(catalogPath, append(bytes.TrimSpace(catalogRaw), '\n'), 0600); err != nil {
+		return err
+	}
+	if err = safefile.AtomicWrite(configPath, stagedConfig, 0600); err != nil {
+		return err
+	}
+	checkContext, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	command := exec.CommandContext(checkContext, executable, "features", "list")
+	command.Env = envWithOverride("CODEX_HOME", directory)
+	output, commandErr := command.CombinedOutput()
+	if commandErr == nil {
+		return nil
+	}
+	if errors.Is(checkContext.Err(), context.DeadlineExceeded) {
+		return errors.New("Codex 配置预检超时")
+	}
+	message := strings.TrimSpace(string(output))
+	if len(message) > 2000 {
+		message = message[:2000]
+	}
+	if message == "" {
+		message = commandErr.Error()
+	}
+	return fmt.Errorf("Codex 拒绝加载生成的配置: %s", message)
+}
+
+func nonEmptyString(value any) (string, bool) {
+	text, ok := value.(string)
+	text = strings.TrimSpace(text)
+	return text, ok && text != ""
 }
 
 func isManagedRootKey(key string) bool {
@@ -340,6 +644,9 @@ func modelContextWindow(model string) int {
 }
 
 func catalogModels(desired DesiredConfig) []string {
+	if desired.IntegrationMode == "direct" {
+		return []string{desired.ProviderModel}
+	}
 	seen := map[string]bool{}
 	models := make([]string, 0, len(desired.Models)+1)
 	for _, model := range append([]string{desired.Model}, desired.Models...) {
@@ -492,6 +799,19 @@ func (a *Adapter) compose(raw json.RawMessage) (string, []byte, []byte, DesiredC
 	if err != nil {
 		return "", nil, nil, desired, err
 	}
+	if desired.IntegrationMode == "direct" {
+		desired.RouterConfigPath = strings.TrimSpace(a.RouterConfigPath)
+		if desired.RouterConfigPath == "" {
+			return "", nil, nil, desired, errors.New("AI Router 未提供运行配置路径，无法安全生成官方直连认证命令")
+		}
+		desired.AirExecutable = strings.TrimSpace(a.AirExecutable)
+		if desired.AirExecutable == "" {
+			desired.AirExecutable, err = os.Executable()
+			if err != nil {
+				return "", nil, nil, desired, fmt.Errorf("定位 air 可执行文件: %w", err)
+			}
+		}
+	}
 	path, err := a.path()
 	if err != nil {
 		return "", nil, nil, desired, err
@@ -501,7 +821,11 @@ func (a *Adapter) compose(raw json.RawMessage) (string, []byte, []byte, DesiredC
 		return "", nil, nil, desired, err
 	}
 	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
-	return path, current, merge(current, desired, catalogPath), desired, nil
+	next := merge(current, desired, catalogPath)
+	if err = validateCodexConfig(next); err != nil {
+		return "", nil, nil, desired, err
+	}
+	return path, current, next, desired, nil
 }
 
 func (a *Adapter) Read(ctx context.Context) (application.State, error) {
@@ -518,25 +842,57 @@ func (a *Adapter) Read(ctx context.Context) (application.State, error) {
 		return application.State{}, err
 	}
 	state := managed(raw)
-	return application.State{Manifest: a.Manifest(), Detection: detection, Path: path, Exists: len(bytes.TrimSpace(raw)) > 0, Managed: state, PreservedFields: len(strings.Split(strings.TrimSpace(string(raw)), "\n")), Synced: state["provider"] == "airoute" && state["base_url"] != nil && state["model"] != nil}, nil
+	provider, _ := state["provider"].(string)
+	if provider == "airoute-direct" {
+		state["integration_mode"] = "direct"
+	} else if provider == "airoute" {
+		state["integration_mode"] = "compatibility"
+	}
+	return application.State{Manifest: a.Manifest(), Detection: detection, Path: path, Exists: len(bytes.TrimSpace(raw)) > 0, Managed: state, PreservedFields: len(strings.Split(strings.TrimSpace(string(raw)), "\n")), Synced: (provider == "airoute" || provider == "airoute-direct") && state["base_url"] != nil && state["model"] != nil}, nil
 }
 
-func (a *Adapter) Preview(_ context.Context, raw json.RawMessage) (application.Preview, error) {
-	path, current, next, _, err := a.compose(raw)
+func (a *Adapter) ConfigurationSynced(_ context.Context) (bool, error) {
+	path, err := a.path()
 	if err != nil {
+		return false, err
+	}
+	raw, err := read(path)
+	if err != nil {
+		return false, err
+	}
+	state := managed(raw)
+	provider, _ := state["provider"].(string)
+	baseURL, _ := state["base_url"].(string)
+	model, _ := state["model"].(string)
+	return (provider == "airoute" || provider == "airoute-direct") && strings.TrimSpace(baseURL) != "" && strings.TrimSpace(model) != "", nil
+}
+
+func (a *Adapter) Preview(ctx context.Context, raw json.RawMessage) (application.Preview, error) {
+	path, current, next, desired, err := a.compose(raw)
+	if err != nil {
+		return application.Preview{}, err
+	}
+	catalog, err := modelCatalog(desired)
+	if err != nil {
+		return application.Preview{}, err
+	}
+	if err = a.preflightWithCodex(ctx, next, catalog); err != nil {
 		return application.Preview{}, err
 	}
 	return application.Preview{Path: path, Current: previewJSON(current), Content: previewJSON(next), Diff: lineDiff(current, next), PreservedFields: len(strings.Split(strings.TrimSpace(string(current)), "\n")), WillCreateBackup: len(bytes.TrimSpace(current)) > 0}, nil
 }
 
-func (a *Adapter) Apply(_ context.Context, raw json.RawMessage) (application.ApplyResult, error) {
-	path, _, next, desired, err := a.compose(raw)
+func (a *Adapter) Apply(ctx context.Context, raw json.RawMessage) (application.ApplyResult, error) {
+	path, current, next, desired, err := a.compose(raw)
 	if err != nil {
 		return application.ApplyResult{}, err
 	}
 	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
 	catalog, err := modelCatalog(desired)
 	if err != nil {
+		return application.ApplyResult{}, err
+	}
+	if err = a.preflightWithCodex(ctx, next, catalog); err != nil {
 		return application.ApplyResult{}, err
 	}
 	previousCatalog, err := snapshot(catalogPath)
@@ -555,7 +911,13 @@ func (a *Adapter) Apply(_ context.Context, raw json.RawMessage) (application.App
 		return application.ApplyResult{}, err
 	}
 	state := managed(next)
-	if state["provider"] != "airoute" || state["model"] == nil {
+	expectedProvider := "airoute"
+	if desired.IntegrationMode == "direct" {
+		expectedProvider = "airoute-direct"
+	}
+	if state["provider"] != expectedProvider || state["model"] == nil {
+		_ = restoreSnapshot(catalogPath, previousCatalog)
+		_ = restoreSnapshot(path, fileSnapshot{Exists: len(current) > 0, Content: current})
 		return application.ApplyResult{}, errors.New("写入后的 Codex 配置无效")
 	}
 	_ = safefile.Prune(path, backupMarker, 10)
@@ -568,9 +930,8 @@ func (a *Adapter) ApplyRaw(_ context.Context, input application.RawConfig) (appl
 		return application.ApplyResult{}, err
 	}
 	next := []byte(strings.TrimSpace(input.Content) + "\n")
-	var document map[string]any
-	if err = toml.Unmarshal(next, &document); err != nil {
-		return application.ApplyResult{}, fmt.Errorf("Codex 配置不是有效 TOML: %w", err)
+	if err = validateCodexConfig(next); err != nil {
+		return application.ApplyResult{}, err
 	}
 	catalogPath := filepath.Join(filepath.Dir(path), catalogName)
 	previousCatalog, err := snapshot(catalogPath)
@@ -582,7 +943,7 @@ func (a *Adapter) ApplyRaw(_ context.Context, input application.RawConfig) (appl
 		return application.ApplyResult{}, err
 	}
 	state := managed(next)
-	if state["provider"] == "airoute" && state["model"] != nil && len(input.Config) > 0 {
+	if (state["provider"] == "airoute" || state["provider"] == "airoute-direct") && state["model"] != nil && len(input.Config) > 0 {
 		desired, decodeErr := decodeDesired(input.Config)
 		if decodeErr != nil {
 			return application.ApplyResult{}, decodeErr
@@ -651,12 +1012,25 @@ func (a *Adapter) Verify(ctx context.Context, options application.VerifyOptions)
 		result.OK = false
 	}
 	started = time.Now()
-	payload, _ := json.Marshal(map[string]any{"model": desired.Model, "input": "Reply with OK.", "max_output_tokens": 32, "stream": true, "reasoning": map[string]any{"effort": "high", "summary": "auto"}})
-	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, desired.BaseURL+"/responses", bytes.NewReader(payload))
+	baseURL := desired.BaseURL
+	model := desired.Model
+	apiKey := desired.APIKey
+	stageID, stageLabel := "gateway", "网关链路"
+	if desired.IntegrationMode == "direct" {
+		baseURL = desired.ProviderBaseURL
+		model = desired.ProviderModel
+		stageID, stageLabel = "provider", "官方直连"
+		apiKey, err = a.providerAPIKey(desired.ProviderID)
+		if err != nil {
+			return result, err
+		}
+	}
+	payload, _ := json.Marshal(map[string]any{"model": model, "input": "Reply with OK.", "max_output_tokens": 32, "stream": true, "reasoning": map[string]any{"effort": "high", "summary": "auto"}})
+	req, _ := http.NewRequestWithContext(ctx, http.MethodPost, baseURL+"/responses", bytes.NewReader(payload))
 	req.Header.Set("content-type", "application/json")
-	req.Header.Set("authorization", "Bearer "+desired.APIKey)
+	req.Header.Set("authorization", "Bearer "+apiKey)
 	resp, requestErr := a.HTTPClient.Do(req)
-	detail := desired.BaseURL + "/responses"
+	detail := baseURL + "/responses"
 	ok := requestErr == nil && resp.StatusCode >= 200 && resp.StatusCode < 300
 	if resp != nil {
 		body, readErr := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
@@ -669,7 +1043,7 @@ func (a *Adapter) Verify(ctx context.Context, options application.VerifyOptions)
 			detail = "Responses 流缺少 Codex 必需的输出项生命周期事件"
 		}
 		if !ok {
-			if detail == desired.BaseURL+"/responses" {
+			if detail == baseURL+"/responses" {
 				detail = fmt.Sprintf("HTTP %d", resp.StatusCode)
 			}
 		}
@@ -680,8 +1054,27 @@ func (a *Adapter) Verify(ctx context.Context, options application.VerifyOptions)
 	if !ok {
 		result.OK = false
 	}
-	result.Stages = append(result.Stages, application.VerifyStage{ID: "gateway", Label: "网关链路", OK: ok, Message: map[bool]string{true: "Codex Responses 流式链路验证成功", false: "Codex Responses 流式链路验证失败"}[ok], Detail: detail, Latency: time.Since(started).Milliseconds()})
+	result.Stages = append(result.Stages, application.VerifyStage{ID: stageID, Label: stageLabel, OK: ok, Message: map[bool]string{true: "Codex Responses 流式链路验证成功", false: "Codex Responses 流式链路验证失败"}[ok], Detail: detail, Latency: time.Since(started).Milliseconds()})
 	return result, nil
+}
+
+func (a *Adapter) providerAPIKey(providerID string) (string, error) {
+	if strings.TrimSpace(a.RouterConfigPath) == "" {
+		return "", errors.New("AI Router 运行配置路径为空")
+	}
+	current, err := config.Load(a.RouterConfigPath)
+	if err != nil {
+		return "", err
+	}
+	for _, provider := range current.Providers {
+		if provider.ID == providerID {
+			if strings.TrimSpace(provider.APIKey) == "" {
+				return "", fmt.Errorf("Provider %s 没有 API Key", providerID)
+			}
+			return provider.APIKey, nil
+		}
+	}
+	return "", fmt.Errorf("Provider %s 不存在", providerID)
 }
 
 func (a *Adapter) Backups(_ context.Context) ([]application.Backup, error) {

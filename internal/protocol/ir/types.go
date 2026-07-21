@@ -52,9 +52,11 @@ type ContentBlock struct {
 }
 
 type Tool struct {
+	Type        string          `json:"type,omitempty"`
 	Name        string          `json:"name"`
 	Description string          `json:"description,omitempty"`
 	InputSchema json.RawMessage `json:"input_schema"`
+	Extension   json.RawMessage `json:"extension,omitempty"`
 }
 
 type ToolChoice struct {

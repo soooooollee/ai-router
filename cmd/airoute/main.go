@@ -75,6 +75,8 @@ func run(args []string) error {
 		return routes(args)
 	case "probe":
 		return probe(args)
+	case "provider-token":
+		return providerToken(args)
 	case "status":
 		return status(args)
 	case "ui":
@@ -107,9 +109,51 @@ Usage:
   air models   [--config airoute.yaml] [--json]
   air routes   [--config airoute.yaml] [--json]
   air probe    [--config airoute.yaml] --provider ID [--json]
+  air provider-token [--config airoute.yaml] --provider ID
   air convert  --from openai-chat --to anthropic-messages [file]
   air version
 `)
+}
+
+// providerToken is designed for Codex's command-backed custom-provider auth.
+// It keeps upstream credentials out of ~/.codex/config.toml and writes only the
+// selected token to stdout, as required by Codex.
+func providerToken(args []string) error {
+	fs := flag.NewFlagSet("provider-token", flag.ContinueOnError)
+	path := fs.String("config", "", "AI Router configuration file")
+	providerID := fs.String("provider", "", "provider ID")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	if strings.TrimSpace(*providerID) == "" {
+		return errors.New("--provider is required")
+	}
+	if strings.TrimSpace(*path) == "" {
+		statePath, _, err := runtimePaths()
+		if err != nil {
+			return err
+		}
+		state, err := loadRuntimeState(statePath)
+		if err != nil {
+			return fmt.Errorf("locate running AI Router config: %w", err)
+		}
+		*path = state.ConfigPath
+	}
+	current, err := config.Load(*path)
+	if err != nil {
+		return err
+	}
+	for _, provider := range current.Providers {
+		if provider.ID != *providerID {
+			continue
+		}
+		if strings.TrimSpace(provider.APIKey) == "" {
+			return fmt.Errorf("provider %q has no API key", *providerID)
+		}
+		fmt.Println(provider.APIKey)
+		return nil
+	}
+	return fmt.Errorf("provider %q not found", *providerID)
 }
 
 const minimalConfig = `version: 1
@@ -216,7 +260,7 @@ func serve(args []string) error {
 	gw := gateway.New(store, reg, logs, metrics, logger)
 	gw.SetLogLevelController(levelController)
 	gatewayURL := "http://" + externalHost(c.Server.Listen)
-	adm := admin.New(store, reg, logs, metrics, version, gatewayURL)
+	adm := admin.New(store, reg, logs, metrics, version, gatewayURL, *path)
 	adm.SetGatewayControl(gw)
 	gatewayServer := &http.Server{Addr: c.Server.Listen, Handler: gw, ReadHeaderTimeout: c.Server.ReadHeaderTimeout, IdleTimeout: 2 * time.Minute}
 	gatewayServer.MaxHeaderBytes = c.Server.MaxHeaderBytes

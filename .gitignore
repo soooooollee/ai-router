@@ -5,6 +5,7 @@
 /web/dist/
 /npm/vendor/
 /web/test-results/
+/test-results/
 /web/playwright-report/
 /web/*.tsbuildinfo
 *.log

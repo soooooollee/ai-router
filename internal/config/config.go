@@ -73,21 +73,32 @@ type APIKey struct {
 }
 
 type Provider struct {
-	ID              string            `yaml:"id" json:"id"`
-	Name            string            `yaml:"name" json:"name"`
-	Profile         string            `yaml:"profile" json:"profile,omitempty"`
-	ReasoningMode   string            `yaml:"reasoning_mode" json:"reasoning_mode,omitempty"`
-	MaxOutputTokens int               `yaml:"max_output_tokens" json:"max_output_tokens,omitempty"`
-	Protocol        ir.Protocol       `yaml:"protocol" json:"protocol"`
-	BaseURL         string            `yaml:"base_url" json:"base_url"`
-	APIKey          string            `yaml:"api_key" json:"-"`
-	Models          []string          `yaml:"models" json:"models"`
-	DynamicModels   bool              `yaml:"dynamic_models" json:"dynamic_models"`
-	Headers         map[string]string `yaml:"headers" json:"-"`
-	RequestFields   map[string]any    `yaml:"request_fields" json:"-"`
-	TimeoutText     string            `yaml:"timeout" json:"-"`
-	Timeout         time.Duration     `yaml:"-" json:"timeout"`
-	AllowPrivateURL bool              `yaml:"allow_private_url" json:"allow_private_url"`
+	ID                 string            `yaml:"id" json:"id"`
+	Name               string            `yaml:"name" json:"name"`
+	Profile            string            `yaml:"profile" json:"profile,omitempty"`
+	ReasoningMode      string            `yaml:"reasoning_mode" json:"reasoning_mode,omitempty"`
+	MaxOutputTokens    int               `yaml:"max_output_tokens" json:"max_output_tokens,omitempty"`
+	Protocol           ir.Protocol       `yaml:"protocol" json:"protocol"`
+	BaseURL            string            `yaml:"base_url" json:"base_url"`
+	APIKey             string            `yaml:"api_key" json:"-"`
+	Models             []string          `yaml:"models" json:"models"`
+	DynamicModels      bool              `yaml:"dynamic_models" json:"dynamic_models"`
+	Headers            map[string]string `yaml:"headers" json:"-"`
+	RequestFields      map[string]any    `yaml:"request_fields" json:"-"`
+	RequestPolicy      RequestPolicy     `yaml:"request_policy" json:"request_policy,omitempty"`
+	CodexIntegration   string            `yaml:"codex_integration" json:"codex_integration,omitempty"`
+	CodexCompatibility string            `yaml:"codex_compatibility" json:"codex_compatibility,omitempty"`
+	CompatibilityMode  string            `yaml:"compatibility_mode" json:"compatibility_mode,omitempty"`
+	ToolChoiceMode     string            `yaml:"tool_choice_mode" json:"tool_choice_mode,omitempty"`
+	ReasoningHistory   string            `yaml:"reasoning_history" json:"reasoning_history,omitempty"`
+	ReasoningWithTools string            `yaml:"reasoning_with_tools" json:"reasoning_with_tools,omitempty"`
+	TimeoutText        string            `yaml:"timeout" json:"-"`
+	Timeout            time.Duration     `yaml:"-" json:"timeout"`
+	AllowPrivateURL    bool              `yaml:"allow_private_url" json:"allow_private_url"`
+}
+
+type RequestPolicy struct {
+	OmitFields []string `yaml:"omit_fields" json:"omit_fields,omitempty"`
 }
 
 type Route struct {
@@ -490,6 +501,54 @@ func (c *Config) Validate() error {
 		}
 		if p.MaxOutputTokens < 0 {
 			errs = append(errs, fmt.Errorf("providers[%d].max_output_tokens must be positive", i))
+		}
+		if p.CodexIntegration != "" && p.CodexIntegration != "direct" && p.CodexIntegration != "passthrough" && p.CodexIntegration != "compatibility" {
+			errs = append(errs, fmt.Errorf("providers[%d].codex_integration must be direct, passthrough, or compatibility", i))
+		}
+		if p.CodexIntegration == "direct" && p.Protocol != ir.OpenAIResponses {
+			errs = append(errs, fmt.Errorf("providers[%d].codex_integration direct requires protocol openai-responses", i))
+		}
+		if p.CodexCompatibility != "" && p.CodexCompatibility != "full" && p.CodexCompatibility != "degraded" && p.CodexCompatibility != "unverified" && p.CodexCompatibility != "incompatible" && p.CodexCompatibility != "unavailable" {
+			errs = append(errs, fmt.Errorf("providers[%d].codex_compatibility must be full, degraded, unverified, incompatible, or unavailable", i))
+		}
+		switch p.CompatibilityMode {
+		case "":
+		case "codex-chat":
+			if p.Protocol != ir.OpenAIChat {
+				errs = append(errs, fmt.Errorf("providers[%d].compatibility_mode codex-chat requires protocol openai-chat", i))
+			}
+		case "codex-responses":
+			if p.Protocol != ir.OpenAIResponses {
+				errs = append(errs, fmt.Errorf("providers[%d].compatibility_mode codex-responses requires protocol openai-responses", i))
+			}
+		default:
+			errs = append(errs, fmt.Errorf("providers[%d].compatibility_mode must be codex-chat or codex-responses", i))
+		}
+		if p.ToolChoiceMode != "" && p.ToolChoiceMode != "standard" && p.ToolChoiceMode != "required" && p.ToolChoiceMode != "auto-only" {
+			errs = append(errs, fmt.Errorf("providers[%d].tool_choice_mode must be standard, required, or auto-only", i))
+		}
+		if p.ReasoningHistory != "" && p.ReasoningHistory != "preserve" && p.ReasoningHistory != "drop" {
+			errs = append(errs, fmt.Errorf("providers[%d].reasoning_history must be preserve or drop", i))
+		}
+		if p.ReasoningWithTools != "" && p.ReasoningWithTools != "supported" && p.ReasoningWithTools != "disabled" {
+			errs = append(errs, fmt.Errorf("providers[%d].reasoning_with_tools must be supported or disabled", i))
+		}
+		seenOmittedFields := map[string]bool{}
+		for j, field := range p.RequestPolicy.OmitFields {
+			field = strings.TrimSpace(field)
+			if field == "" {
+				errs = append(errs, fmt.Errorf("providers[%d].request_policy.omit_fields[%d] must not be empty", i, j))
+				continue
+			}
+			if strings.ContainsAny(field, ".[]") {
+				errs = append(errs, fmt.Errorf("providers[%d].request_policy.omit_fields[%d] must name a top-level request field", i, j))
+				continue
+			}
+			if seenOmittedFields[field] {
+				errs = append(errs, fmt.Errorf("providers[%d].request_policy.omit_fields contains duplicate field %q", i, field))
+			}
+			seenOmittedFields[field] = true
+			p.RequestPolicy.OmitFields[j] = field
 		}
 		if _, ok := providers[p.ID]; ok {
 			errs = append(errs, fmt.Errorf("duplicate provider id %q", p.ID))

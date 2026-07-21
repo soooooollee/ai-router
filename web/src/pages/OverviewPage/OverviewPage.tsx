@@ -1,4 +1,5 @@
 import React from "react";
+import { Box, Braces, FileText, HardDrive, Route } from "lucide-react";
 import { currentLocale } from "../../app/i18n";
 import type { Status } from "../../types";
 
@@ -38,7 +39,7 @@ export function OverviewPage({ status }: { status: Status | null }) {
       <header className="overview-compact-header">
         <div>
           <h1>运行概览</h1>
-          <p>查看本地网关的实时请求、Token 消耗和链路性能。</p>
+          <p>查看模型、路由、应用、日志以及本地网关的实时运行状态。</p>
         </div>
         <div className={`overview-inline-status ${running ? "ok" : "bad"}`}>
           <i />
@@ -46,6 +47,29 @@ export function OverviewPage({ status }: { status: Status | null }) {
           <span>· 已运行 {formatUptime(status?.uptime_seconds)}</span>
         </div>
       </header>
+
+      <section className="overview-config-grid">
+        <article className="overview-config-card">
+          <Box size={19} />
+          <div><span>模型数量</span><strong>{number(status?.models)}</strong><small>{number(status?.providers)} 个模型服务</small></div>
+        </article>
+        <article className="overview-config-card">
+          <Route size={19} />
+          <div><span>路由数量</span><strong>{number(status?.routes)}</strong><small>全部客户端协议路由</small></div>
+        </article>
+        <article className="overview-config-card">
+          <Braces size={19} />
+          <div><span>已配置应用</span><strong>{number(status?.applications_configured)} / {number(status?.applications_total)}</strong><small>已同步到 AI Router</small></div>
+        </article>
+        <article className="overview-config-card">
+          <FileText size={19} />
+          <div><span>日志数量</span><strong>{number(status?.logs)}</strong><small>最多保留 {number(status?.logs_capacity)} 条</small></div>
+        </article>
+        <article className={`overview-config-card ${status?.logging_persist ? "enabled" : ""}`}>
+          <HardDrive size={19} />
+          <div><span>日志持久化</span><strong>{status?.logging_persist ? "已开启" : "未开启"}</strong><small>{status?.logging_persist ? "服务重启后仍保留" : "日志仅保存在内存"}</small></div>
+        </article>
+      </section>
 
       <section className="overview-metric-grid">
         <article className="overview-metric-card">

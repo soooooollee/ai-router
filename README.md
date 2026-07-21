@@ -74,6 +74,33 @@ air doctor     Run configuration diagnostics
 air --help     Show all commands
 ```
 
+## Provider compatibility detection
+
+When adding a model service, Detection Engine v7 separately verifies the native protocol, JSON/SSE contracts, function tools, reasoning, tools with reasoning, multi-turn continuation, native Codex custom tools, and the `apply_patch` path through AI Router. A provider is advertised as Codex official direct only when its upstream Responses endpoint passes the native custom-tool round trip; Router event reconstruction is no longer reported as native compatibility. Deterministic tools-with-reasoning failures also stop negotiation immediately instead of repeating the same slow request with multiple `tool_choice` values.
+
+AI Router recommends one of three Codex integration modes:
+
+- `direct`: Codex connects to the upstream Responses endpoint. The upstream token is supplied by `air provider-token` and is not copied into `~/.codex/config.toml`.
+- `passthrough`: Codex connects through AI Router for routing, logs, and key management without compatibility repair.
+- `compatibility`: Codex connects through AI Router, which translates Chat or incomplete Responses behavior into Codex Responses.
+
+An OpenAI Chat service that cannot accept `tools` together with `reasoning_effort` can be marked with the explicit Codex Chat compatibility mode:
+
+```yaml
+providers:
+  - id: compatible-chat
+    protocol: openai-chat
+    codex_integration: compatibility
+    compatibility_mode: codex-chat
+    base_url: https://example.com/v1
+    api_key: ${PROVIDER_API_KEY}
+    models: [gpt-compatible]
+```
+
+The console explains this mode as `Codex CLI / ChatGPT App compatible through AI Router`. AI Router converts Codex Responses requests to OpenAI Chat, removes the incompatible `reasoning_effort`, and records a `codex_chat_compatibility_mode` diagnostic. Tool calls are preserved, but reasoning intensity may differ from the Codex setting, so model onboarding displays an explicit compatibility notice.
+
+For Responses-compatible services that only accept standard function tools, automatic detection uses `compatibility_mode: codex-responses` to translate Codex custom tools to functions and restore `apply_patch` events on the way back. Detection may also save actionable policies such as `tool_choice_mode: auto-only`, `reasoning_history: preserve`, and `reasoning_with_tools: disabled`; these are runtime transformation rules rather than a permanent snapshot of one probe run.
+
 To update, rerun the curl or npm install command above, or run `brew update && brew upgrade airoute` for Homebrew. Then run `air restart` if AI Router is already running.
 
 ## License

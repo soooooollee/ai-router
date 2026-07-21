@@ -32,21 +32,24 @@ export function ProvidersPage({
   const [pendingDelete, setPendingDelete] = useState<Provider | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [notice, noticeContext] = notification.useNotification();
-  async function probe(id: string, testRequest = false) {
+  async function probe(id: string) {
     setProbing(id);
     const provider = data.find((item) => item.id === id);
     try {
       const r = await api(`/api/providers/${id}/probe`, {
         method: "POST",
-        body: JSON.stringify({ test_request: testRequest }),
+        body: JSON.stringify({}),
       });
       const detail = r.ok
-        ? `${r.latency_ms} ms · ${testRequest ? (r.test_ok ? "测试通过" : `测试失败（${r.test_status || "未知状态"}）`) : "连接正常"}`
+        ? `${r.latency_ms} ms · 真实请求通过${r.models_ok ? "" : " · 模型列表不可用"}`
         : r.error || `HTTP ${r.status || "未知状态"}`;
       setResult((x) => ({ ...x, [id]: detail }));
       if (r.ok) {
-        notice.success({
-          message: "连接测试通过",
+        const notify = r.models_ok ? notice.success : notice.warning;
+        notify({
+          message: r.models_ok
+            ? "连接测试通过"
+            : "真实请求可用，模型发现不可用",
           description: `${provider?.name || id} · ${detail}`,
           placement: "bottomRight",
           duration: 4,
@@ -108,10 +111,9 @@ export function ProvidersPage({
     },
     {
       title: "协议",
-      dataIndex: "protocol",
       key: "protocol",
-      width: 140,
-      render: (value: string) => <Tag>{protocolName(value)}</Tag>,
+      width: 245,
+      render: (_, provider) => <Tag>{protocolName(provider.protocol)}</Tag>,
     },
     {
       title: "API 地址",

@@ -54,9 +54,16 @@ export function RoutesPage({
   const [pendingDelete, setPendingDelete] = useState<RouteConfig | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [notice, noticeContext] = notification.useNotification();
-  const targetLabel = (providerID: string, model: string) => {
+  const targetLabel = (
+    providerID: string,
+    model: string,
+  ) => {
     const provider = providers.find((item) => item.id === providerID);
-    return providerModelLabel(provider?.name, providerID, model);
+    return providerModelLabel(
+      provider?.name,
+      providerID,
+      model,
+    );
   };
   async function remove() {
     if (!pendingDelete) return;
@@ -102,14 +109,20 @@ export function RoutesPage({
       render: (_, route) => (
         <Tooltip
           title={route.targets
-            .map((target) => targetLabel(target.provider, target.model))
+            .map((target) => targetLabel(
+              target.provider,
+              target.model,
+            ))
             .join("\n")}
           placement="topLeft"
         >
           <div className="table-route-target">
             {route.targets.map((target, index) => (
               <code key={`${target.provider}-${target.model}-${index}`}>
-                {targetLabel(target.provider, target.model)}
+                {targetLabel(
+                  target.provider,
+                  target.model,
+                )}
               </code>
             ))}
           </div>
@@ -366,7 +379,11 @@ function RouteDialog({
                     key={`${provider.id}:${model}`}
                     value={`${provider.id}:${model}`}
                   >
-                    {providerModelLabel(provider.name, provider.id, model)}
+                    {providerModelLabel(
+                      provider.name,
+                      provider.id,
+                      model,
+                    )}
                   </option>
                 )),
               )}

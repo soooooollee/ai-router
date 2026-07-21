@@ -4,6 +4,30 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-21
+
+### Added
+
+- Add deterministic provider onboarding that detects Anthropic Messages, OpenAI Chat, OpenAI Responses and Gemini endpoints with live JSON/SSE, tools, reasoning, combined-tool and multi-turn checks.
+- Add native Codex custom-tool probing plus an end-to-end `apply_patch` verification path through AI Router, with explicit timeout and failure diagnostics.
+- Add Codex official third-party provider configuration with command-backed token retrieval, while retaining Router compatibility modes for Chat and incomplete Responses services.
+- Add automatic generation of Claude, OpenAI Chat, OpenAI Responses and Gemini routes for every newly added model, with an opt-out during onboarding.
+- Add overview counters for configured models, routes, applications, retained logs and log persistence.
+
+### Changed
+
+- Merge Codex CLI and ChatGPT App into one application configuration surface because both share `~/.codex/config.toml`.
+- Classify provider capabilities from direct protocol evidence instead of endpoint acceptance alone, and retain actionable request policies for tools, reasoning and tool-choice behavior.
+- Simplify compatibility labels in model and route lists while keeping detailed explanations in model onboarding and the selected Codex application configuration.
+- Keep the original request, success-rate, Token, concurrency and latency overview below the new configuration counters.
+
+### Fixed
+
+- Translate Codex Responses custom tools and tool results through Chat or incomplete Responses providers, then reconstruct custom-tool streaming events and call IDs for Codex clients.
+- Avoid false incompatibility when a stricter tools-with-reasoning probe proves tool support after a slower standalone tool probe.
+- Preserve valid Codex configuration while removing deprecated hooks and invalid MCP transport fields from AI Router-managed content.
+- Detect Anthropic-compatible endpoints independently from OpenAI endpoints and avoid misclassifying slow or unavailable probes as confirmed compatibility.
+
 ## [0.2.4] - 2026-07-14
 
 ### Added
@@ -116,7 +140,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.5
 [0.2.4]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.4
 [0.2.3]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.3
 [0.2.2]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.2

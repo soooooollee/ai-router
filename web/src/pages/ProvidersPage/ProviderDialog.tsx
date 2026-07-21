@@ -1,8 +1,170 @@
 import React, { useState } from "react";
-import { Activity, Check, Save, TriangleAlert } from "lucide-react";
+import { Activity, Check, Eye, EyeOff, Save, TriangleAlert } from "lucide-react";
 import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
-import { protocolName } from "../../lib";
+import { generatedProviderRoutes, protocolName } from "../../lib";
+
+type CapabilityCheck = {
+  ok: boolean;
+  state?: "supported" | "unsupported" | "inconclusive" | "not_tested";
+  confidence?: number;
+  status?: number;
+  latency_ms?: number;
+  error_code?: string;
+  error?: string;
+  evidence?: string[];
+};
+
+type ProtocolCapabilities = {
+  basic: CapabilityCheck;
+  streaming?: CapabilityCheck;
+  tools?: CapabilityCheck;
+  reasoning?: CapabilityCheck;
+  tools_with_reasoning?: CapabilityCheck;
+  tool_round_trip?: CapabilityCheck;
+  codex_direct?: CapabilityCheck;
+  codex_end_to_end?: CapabilityCheck;
+};
+
+type DetectionResult = {
+  ok: boolean;
+  protocol?: string;
+  profile?: string;
+  label?: string;
+  latency_ms?: number;
+  detector_version?: number;
+  cached?: boolean;
+  model_reports?: Record<string, { protocol?: string; basic: CapabilityCheck }>;
+  attempts?: Array<{ protocol?: string; status?: number; error?: string }>;
+  protocols?: Record<string, ProtocolCapabilities>;
+  codex_compatibility?: {
+    status: "full" | "degraded" | "unverified" | "incompatible" | "unavailable";
+    protocol?: string;
+    message: string;
+    recommended_omit_fields?: string[];
+    confidence?: number;
+    verified?: boolean;
+    recommended_integration_mode?: "direct" | "passthrough" | "compatibility";
+    recommended_compatibility_mode?: "codex-chat" | "codex-responses";
+    recommended_tool_choice_mode?: "standard" | "required" | "auto-only";
+    recommended_reasoning_history?: "preserve" | "drop";
+    recommended_reasoning_with_tools?: "supported" | "disabled";
+  };
+};
+
+function capabilityText(check?: CapabilityCheck) {
+  if (!check || check.state === "not_tested") return "未测试";
+  if (check.state === "supported" || check.ok) return "已支持";
+  if (check.state === "inconclusive") return "尚未确认";
+  return "不支持";
+}
+
+function capabilityDiagnostic(check?: CapabilityCheck) {
+  if (!check || check.state === "supported" || check.state === "not_tested") return "";
+  const code = (check.error_code || "").toLowerCase();
+  const error = (check.error || "").toLowerCase();
+  let reason = "";
+  if (code.includes("timeout") || error.includes("deadline exceeded")) {
+    reason = "请求超时";
+  } else if (code === "tool_not_observed") {
+    reason = "请求已被接受，但模型未返回工具调用";
+  } else if (code === "schema_mismatch") {
+    reason = "响应结构不符合预期";
+  } else if (code.includes("sse") || code.includes("stream") || code.includes("content_type")) {
+    reason = "流式响应结构不符合预期";
+  } else if (code.includes("custom_tool_not_observed")) {
+    reason = "未观察到模型触发 apply_patch custom tool";
+  } else if (code.includes("call_id_missing")) {
+    reason = "custom tool 调用缺少 call ID";
+  } else if (code.includes("round_trip")) {
+    reason = "第二轮工具结果续接失败";
+  } else if (check.error_code) {
+    reason = check.error_code;
+  } else if (check.error) {
+    reason = check.error.slice(0, 120);
+  }
+  const latency = check.latency_ms
+    ? check.latency_ms >= 1000
+      ? `${(check.latency_ms / 1000).toFixed(1)} 秒`
+      : `${check.latency_ms} ms`
+    : "";
+  return [reason, latency].filter(Boolean).join(" · ");
+}
+
+function capabilityResultText(check?: CapabilityCheck) {
+  const result = capabilityText(check);
+  const diagnostic = capabilityDiagnostic(check);
+  return diagnostic ? `${result} · ${diagnostic}` : result;
+}
+
+function compatibilityTitle(
+  status: NonNullable<DetectionResult["codex_compatibility"]>["status"],
+  mode?: NonNullable<DetectionResult["codex_compatibility"]>["recommended_integration_mode"],
+) {
+  switch (status) {
+    case "full":
+      if (mode === "direct") return "Codex 官方直连完整兼容";
+      if (mode === "compatibility") return "Codex 经 AI Router 完整兼容";
+      return "Codex 完整兼容";
+    case "degraded":
+      return mode === "compatibility"
+        ? "Codex CLI / ChatGPT App 经 AI Router 兼容"
+        : "Codex 兼容";
+    case "unverified":
+      return mode === "compatibility"
+        ? "Codex 经 AI Router 待验证"
+        : "Codex 尚未验证";
+    case "unavailable": return "Codex 检测未完成";
+    default: return "Codex 不兼容";
+  }
+}
+
+async function streamProviderDetection(
+  body: Record<string, unknown>,
+  onProgress: (message: string) => void,
+): Promise<DetectionResult> {
+  const token = sessionStorage.getItem("airoute_token") || "";
+  const response = await fetch("/api/providers/detect?stream=1", {
+    method: "POST",
+    headers: {
+      "content-type": "application/json",
+      ...(token ? { authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok || !response.body) {
+    const failure = await response.json().catch(() => ({ error: response.statusText }));
+    throw new Error(failure.error || `HTTP ${response.status}`);
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let result: DetectionResult | null = null;
+  for (;;) {
+    const chunk = await reader.read();
+    buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+    const frames = buffer.split(/\r?\n\r?\n/);
+    buffer = frames.pop() || "";
+    for (const frame of frames) {
+      const event = frame.split(/\r?\n/).find((line) => line.startsWith("event:"))?.slice(6).trim();
+      const data = frame.split(/\r?\n/).find((line) => line.startsWith("data:"))?.slice(5).trim();
+      if (!data) continue;
+      const value = JSON.parse(data);
+      if (event === "progress") onProgress(value.message || "正在检测…");
+      if (event === "result") result = value;
+    }
+    if (chunk.done) break;
+  }
+  if (!result) throw new Error("检测连接已结束，但没有收到最终结果");
+  return result;
+}
+
+function fieldList(value: string) {
+  return value
+    .split(",")
+    .map((field) => field.trim())
+    .filter(Boolean);
+}
 
 function isPrivateProviderURL(value: string) {
   try {
@@ -61,6 +223,19 @@ export function ProviderDialog({
     reasoning_mode: raw?.reasoning_mode || "auto",
     max_output_tokens: String(raw?.max_output_tokens || ""),
     protocol: raw?.protocol || "openai-chat",
+    codex_integration:
+      raw?.codex_integration ||
+      (raw?.compatibility_mode ? "compatibility" : "passthrough"),
+    codex_compatibility: raw?.codex_compatibility || "",
+    compatibility_mode:
+      raw?.compatibility_mode ||
+      (raw?.protocol === "openai-chat" &&
+      (raw?.request_policy?.omit_fields || []).includes("reasoning_effort")
+        ? "codex-chat"
+        : ""),
+    tool_choice_mode: raw?.tool_choice_mode || "standard",
+    reasoning_history: raw?.reasoning_history || "preserve",
+    reasoning_with_tools: raw?.reasoning_with_tools || "supported",
     base_url: raw?.base_url || "",
     api_key: raw?.api_key || "",
     models: (raw?.models || []).join(", "),
@@ -70,25 +245,31 @@ export function ProviderDialog({
     timeout: raw?.timeout || "5m",
     dynamic_models: Boolean(raw?.dynamic_models),
     allow_private_url: Boolean(raw?.allow_private_url),
+    omit_fields: (raw?.request_policy?.omit_fields || []).join(", "),
   });
   const [error, setError] = useState("");
   const [detecting, setDetecting] = useState(false);
-  const [detection, setDetection] = useState<{
-    ok: boolean;
-    label?: string;
-    latency_ms?: number;
-  } | null>(
-    existing === null ? null : { ok: true, label: protocolName(form.protocol) },
+  const [detectionProgress, setDetectionProgress] = useState("");
+  const [autoCreateRoutes, setAutoCreateRoutes] = useState(existing === null);
+  const [showAPIKey, setShowAPIKey] = useState(false);
+  const [detection, setDetection] = useState<DetectionResult | null>(
+    existing === null
+      ? null
+      : {
+          ok: true,
+          label: protocolName(form.protocol),
+        },
   );
   const privateURL = isPrivateProviderURL(form.base_url);
 
-  async function detect() {
+  async function detect(forceRefresh = false) {
     if (privateURL && !form.allow_private_url) {
       setError("检测到本机或局域网地址，请先确认允许 AI Router 访问该模型服务");
       setDetection({ ok: false });
       return;
     }
     setDetecting(true);
+    setDetectionProgress("正在连接模型服务…");
     setError("");
     setDetection(null);
     try {
@@ -96,23 +277,25 @@ export function ProviderDialog({
         .split(",")
         .map((value: string) => value.trim())
         .filter(Boolean);
-      const result = await api("/api/providers/detect", {
-        method: "POST",
-        body: JSON.stringify({
+      const result = await streamProviderDetection(
+        {
           base_url: form.base_url,
           api_key: form.api_key,
           models,
           allow_private_url: form.allow_private_url,
-        }),
-      });
+          force_refresh: forceRefresh,
+        },
+        setDetectionProgress,
+      );
       if (!result.ok) {
+        setDetection(result);
         const attempts = (result.attempts || [])
           .map(
             (item: any) =>
               `${protocolName(item.protocol)}: ${item.status || item.error || "失败"}`,
           )
           .join("；");
-        throw new Error(`没有识别出可用协议。${attempts}`);
+        throw new Error(result.codex_compatibility?.message || `没有识别出可用协议。${attempts}`);
       }
       const firstModel = models[0];
       const generatedID = firstModel
@@ -120,21 +303,66 @@ export function ProviderDialog({
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-|-$/g, "")
         .slice(0, 42);
+      const recommendedOmissions =
+        result.codex_compatibility?.recommended_omit_fields || [];
+      const recommendedCompatibilityMode =
+        result.codex_compatibility?.recommended_compatibility_mode || "";
+      const recommendedIntegrationMode =
+        result.codex_compatibility?.recommended_integration_mode ||
+        (recommendedCompatibilityMode ? "compatibility" : "passthrough");
+      const selectedCompatibilityMode =
+        recommendedCompatibilityMode ||
+        (result.protocol === "openai-chat" &&
+        form.compatibility_mode === "codex-chat"
+          ? "codex-chat"
+          : "");
+      const previousRecommendations =
+        detection?.codex_compatibility?.recommended_omit_fields || [];
       setForm((current) => ({
         ...current,
         id: current.id || generatedID || `model-${Date.now()}`,
         name: current.name || firstModel,
-        protocol: result.protocol,
+        protocol: result.protocol || current.protocol,
+        codex_integration: recommendedIntegrationMode,
+        codex_compatibility:
+          result.codex_compatibility?.status || current.codex_compatibility,
+        compatibility_mode: selectedCompatibilityMode,
         profile: result.profile || "generic",
+        tool_choice_mode:
+          result.codex_compatibility?.recommended_tool_choice_mode ||
+          current.tool_choice_mode,
+        reasoning_history:
+          result.codex_compatibility?.recommended_reasoning_history ||
+          current.reasoning_history,
+        reasoning_with_tools:
+          result.codex_compatibility?.recommended_reasoning_with_tools ||
+          current.reasoning_with_tools,
+        omit_fields: recommendedOmissions.filter(
+          (field: string) =>
+            !(selectedCompatibilityMode === "codex-chat" && field === "reasoning_effort"),
+        ).length
+          ? [
+              ...new Set([
+                ...fieldList(current.omit_fields).filter(
+                  (field) => !previousRecommendations.includes(field),
+                ),
+                ...recommendedOmissions.filter(
+                  (field: string) =>
+                    !(selectedCompatibilityMode === "codex-chat" && field === "reasoning_effort"),
+                ),
+              ]),
+            ].join(", ")
+          : fieldList(current.omit_fields)
+              .filter((field) => !previousRecommendations.includes(field))
+              .join(", "),
       }));
       setDetection({
-        ok: true,
-        label: result.label,
-        latency_ms: result.latency_ms,
+        ...result,
+        label: protocolName(result.protocol || ""),
       });
     } catch (e) {
       setError((e as Error).message);
-      setDetection({ ok: false });
+      setDetection((current) => current || { ok: false });
     } finally {
       setDetecting(false);
     }
@@ -156,7 +384,7 @@ export function ProviderDialog({
             return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
           }),
       );
-      const value = {
+      const value: any = {
         ...raw,
         id: form.id,
         name: form.name,
@@ -166,6 +394,12 @@ export function ProviderDialog({
           ? { max_output_tokens: Number(form.max_output_tokens) }
           : {}),
         protocol: form.protocol,
+        codex_integration: form.codex_integration || undefined,
+        codex_compatibility: form.codex_compatibility || undefined,
+        compatibility_mode: form.compatibility_mode || undefined,
+        tool_choice_mode: form.tool_choice_mode || undefined,
+        reasoning_history: form.reasoning_history || undefined,
+        reasoning_with_tools: form.reasoning_with_tools || undefined,
         base_url: form.base_url,
         api_key: form.api_key,
         timeout: form.timeout,
@@ -177,8 +411,34 @@ export function ProviderDialog({
           .map((x: string) => x.trim())
           .filter(Boolean),
       };
-      if (existing === null) doc.providers.push(value);
-      else
+      const omitFields = fieldList(form.omit_fields).filter(
+        (field) =>
+          !(form.compatibility_mode === "codex-chat" && field === "reasoning_effort"),
+      );
+      if (omitFields.length) {
+        value.request_policy = {
+          ...(raw?.request_policy || {}),
+          omit_fields: omitFields,
+        };
+      } else {
+        delete value.request_policy;
+      }
+      if (!form.compatibility_mode) delete value.compatibility_mode;
+      if (!form.codex_integration) delete value.codex_integration;
+      if (!form.codex_compatibility) delete value.codex_compatibility;
+      if (existing === null) {
+        doc.providers.push(value);
+        if (autoCreateRoutes) {
+          doc.routes = doc.routes || [];
+          doc.routes.push(
+            ...generatedProviderRoutes(
+              doc.routes,
+              value.id,
+              value.models,
+            ),
+          );
+        }
+      } else
         doc.providers = doc.providers.map((p: any) =>
           p.id === existing ? value : p,
         );
@@ -226,15 +486,20 @@ export function ProviderDialog({
           </label>
           <label>
             API Key
-            <input
-              type="text"
-              placeholder="sk-..."
-              value={form.api_key}
-              onChange={(e) => {
-                setForm({ ...form, api_key: e.target.value });
-                setDetection(null);
-              }}
-            />
+            <span className="secret-input-wrap">
+              <input
+                type={showAPIKey ? "text" : "password"}
+                placeholder="sk-..."
+                value={form.api_key}
+                onChange={(e) => {
+                  setForm({ ...form, api_key: e.target.value });
+                  setDetection(null);
+                }}
+              />
+              <button type="button" aria-label={showAPIKey ? "隐藏密钥" : "显示密钥"} onClick={() => setShowAPIKey(!showAPIKey)}>
+                {showAPIKey ? <EyeOff size={15} /> : <Eye size={15} />}
+              </button>
+            </span>
             <small className="secret-storage-hint">
               {form.api_key
                 ? "密钥将明文保存到本机 0600 配置和备份中"
@@ -252,6 +517,21 @@ export function ProviderDialog({
               }}
             />
           </label>
+          {existing === null && (
+            <div className="auto-route-option">
+              <label className="check-label auto-route-switch">
+                <input
+                  type="checkbox"
+                  checked={autoCreateRoutes}
+                  onChange={(event) => setAutoCreateRoutes(event.target.checked)}
+                />
+                自动生成每个模型的全部协议路由
+              </label>
+              <small>
+                默认创建 Claude、OpenAI Chat、OpenAI Responses 和 Gemini 路由；已存在的模型与协议组合会自动跳过。
+              </small>
+            </div>
+          )}
           {privateURL && (
             <div className="private-url-confirmation" role="alert">
               <TriangleAlert size={17} />
@@ -274,21 +554,98 @@ export function ProviderDialog({
             </div>
           )}
         </div>
-        <button className="detect-button" onClick={detect} disabled={detecting}>
+        <button className="detect-button" onClick={() => detect(false)} disabled={detecting}>
           <Activity size={16} />
-          {detecting ? "正在连接并识别…" : "测试连接并自动识别协议"}
+          {detecting ? detectionProgress || "正在连接并识别…" : "测试连接并自动识别协议"}
         </button>
+        {detecting && <div className="detection-progress" role="status"><span /><b>{detectionProgress}</b></div>}
+        <div className="detection-section-label">接入协议</div>
+        <div
+          className={`detected-protocol-field ${detection?.ok ? "identified" : ""}`}
+          aria-live="polite"
+        >
+          <span>原生协议</span>
+          <b>
+            {detecting
+              ? "正在自动识别…"
+              : detection?.ok
+                ? detection.label
+                : "待自动识别"}
+          </b>
+          <small>由上方连接测试自动识别，无需手动选择</small>
+        </div>
         {detection?.ok && (
           <div className="detection-result success">
             <Check size={18} />
             <div>
-              <b>识别成功：{detection.label}</b>
-              <span>真实请求已通过 · {detection.latency_ms} ms</span>
+              <b>API 连接与响应结构验证成功</b>
+              <span>真实请求已通过 · {detection.latency_ms} ms{detection.cached ? " · 使用缓存" : ""}</span>
+            </div>
+          </div>
+        )}
+        {detection?.cached && (
+          <button className="detection-refresh" type="button" onClick={() => detect(true)} disabled={detecting}>
+            强制重新检测
+          </button>
+        )}
+        {detection?.codex_compatibility && detection.codex_compatibility.status !== "full" && (
+          <div
+            className={`detection-result compatibility-result ${detection.codex_compatibility.status}`}
+          >
+            <TriangleAlert size={22} />
+            <div>
+              <b>{compatibilityTitle(
+                detection.codex_compatibility.status,
+                detection.codex_compatibility.recommended_integration_mode,
+              )}</b>
+              <span>{detection.codex_compatibility.message}</span>
             </div>
           </div>
         )}
         <details className="advanced-settings">
           <summary>高级设置与识别结果</summary>
+          {detection?.protocols && (
+            <div className="capability-matrix">
+              {Object.entries(detection.protocols).map(([protocol, report]) => (
+                <div className="capability-row" key={protocol}>
+                  <b>{protocolName(protocol)}</b>
+                  <span>
+                    基础请求：{capabilityResultText(report.basic)}
+                  </span>
+                  {report.streaming && (
+                    <span>流式：{capabilityResultText(report.streaming)}</span>
+                  )}
+                  {report.tools && (
+                    <span>工具：{capabilityResultText(report.tools)}</span>
+                  )}
+                  {report.reasoning && (
+                    <span>推理：{capabilityResultText(report.reasoning)}</span>
+                  )}
+                  {report.tools_with_reasoning && (
+                    <span>
+                      工具+推理：{capabilityResultText(report.tools_with_reasoning)}
+                    </span>
+                  )}
+                  {report.tool_round_trip && <span>多轮续接：{capabilityResultText(report.tool_round_trip)}</span>}
+                  {report.codex_direct && <span>Codex 官方直连：{capabilityResultText(report.codex_direct)}</span>}
+                  {report.codex_end_to_end && (
+                    <span>
+                      经 Router 端到端：{capabilityResultText(report.codex_end_to_end)}
+                    </span>
+                  )}
+                  {!report.basic.ok && report.basic.error && <small title={report.basic.error}>{report.basic.error.slice(0, 180)}</small>}
+                </div>
+              ))}
+            </div>
+          )}
+          {detection?.model_reports && Object.keys(detection.model_reports).length > 1 && (
+            <div className="model-probe-list">
+              <b>逐模型基础验证</b>
+              {Object.entries(detection.model_reports).map(([model, report]) => (
+                <span key={model}>{model} · {capabilityText(report.basic)}</span>
+              ))}
+            </div>
+          )}
           <div className="form-grid">
             <label>
               标识 ID
@@ -303,18 +660,6 @@ export function ProviderDialog({
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
-            </label>
-            <label>
-              识别协议
-              <select
-                value={form.protocol}
-                onChange={(e) => setForm({ ...form, protocol: e.target.value })}
-              >
-                <option value="openai-chat">OpenAI Chat</option>
-                <option value="openai-responses">OpenAI Responses</option>
-                <option value="anthropic-messages">Anthropic / Claude</option>
-                <option value="gemini-generate-content">Gemini</option>
-              </select>
             </label>
             <label>
               模型配置模板
@@ -341,10 +686,35 @@ export function ProviderDialog({
               </select>
             </label>
             <label>
+              工具选择策略
+              <select value={form.tool_choice_mode} onChange={(e) => setForm({ ...form, tool_choice_mode: e.target.value })}>
+                <option value="standard">标准</option>
+                <option value="required">优先 required</option>
+                <option value="auto-only">仅 auto</option>
+              </select>
+            </label>
+            <label>
+              工具与推理组合
+              <select value={form.reasoning_with_tools} onChange={(e) => setForm({ ...form, reasoning_with_tools: e.target.value })}>
+                <option value="supported">允许组合</option>
+                <option value="disabled">工具请求关闭推理</option>
+              </select>
+            </label>
+            <label>
               超时
               <input
                 value={form.timeout}
                 onChange={(e) => setForm({ ...form, timeout: e.target.value })}
+              />
+            </label>
+            <label>
+              省略请求字段
+              <input
+                placeholder="reasoning_effort"
+                value={form.omit_fields}
+                onChange={(e) =>
+                  setForm({ ...form, omit_fields: e.target.value })
+                }
               />
             </label>
           </div>
