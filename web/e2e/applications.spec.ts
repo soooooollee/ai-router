@@ -1,6 +1,20 @@
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
+async function expectModelOptions(
+  page: import("@playwright/test").Page,
+  labels: string[],
+) {
+  await expect(page.getByLabel("默认模型").locator("option")).toHaveText(labels);
+}
+
+async function selectModel(
+  page: import("@playwright/test").Page,
+  label: string,
+) {
+  await page.getByLabel("默认模型").selectOption({ label });
+}
+
 test("application manifest, preview, apply and gateway verification", async ({
   page,
 }) => {
@@ -17,13 +31,19 @@ test("application manifest, preview, apply and gateway verification", async ({
   ]);
   await expect(page.getByText("/tmp/airoute-claude-e2e.json")).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新预览" })).toHaveCount(0);
-	await expect(page.getByLabel("默认模型").locator("option")).toHaveText([
+	await expectModelOptions(page, [
 		"不设置",
-		"fast → 所有兼容协议",
-		"mimo-v2.5 → Anthropic Messages",
+		"Mock Provider → mock-model → 所有兼容协议",
+		"Mock Provider → mock-model → Anthropic Messages",
 	]);
+  const modelSelect = page.getByLabel("默认模型");
+  expect((await modelSelect.boundingBox())?.width).toBeGreaterThan(400);
+  await expect(modelSelect).toHaveAttribute(
+    "title",
+    "Mock Provider → mock-model → 所有兼容协议",
+  );
   await page.getByLabel("AI Router 客户端密钥").fill("e2e-client-key");
-  await page.getByLabel("默认模型").selectOption("fast");
+  await selectModel(page, "Mock Provider → mock-model → 所有兼容协议");
   await expect(page.getByText(/可直接编辑合并后配置/)).toBeVisible();
   await expect(
     page.getByLabel("编辑合并后配置"),
@@ -135,20 +155,20 @@ test("application manifest, preview, apply and gateway verification", async ({
   ).toBeVisible();
   await expect(page.getByText(/Responses 协议/)).toBeVisible();
   await expect(page.getByLabel("默认模型")).toHaveCount(1);
-	await expect(page.getByLabel("默认模型").locator("option")).toHaveText([
+	await expectModelOptions(page, [
 		"不设置",
-		"fast → 所有兼容协议",
-		"mimo-v2.5 → OpenAI Responses",
+		"Mock Provider → mock-model → 所有兼容协议",
+		"Mock Provider → mock-model → OpenAI Responses",
 	]);
   await expect(page.getByLabel("Codex 接入方式")).toHaveCount(0);
   await expect(
     page.getByText("正在使用 AI Router 兼容转换"),
   ).toBeVisible();
   await expect(page.getByText(/修复 custom tools 与 reasoning 差异/)).toBeVisible();
-  await page.getByLabel("默认模型").selectOption("");
+  await selectModel(page, "不设置");
   await expect(page.getByText("正在使用 AI Router 兼容转换")).toHaveCount(0);
   await expect(page.getByText(/修复 custom tools 与 reasoning 差异/)).toHaveCount(0);
-  await page.getByLabel("默认模型").selectOption("fast");
+  await selectModel(page, "Mock Provider → mock-model → 所有兼容协议");
   await expect(page.getByText("Sonnet 角色")).toHaveCount(0);
   await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
     /wire_api = "responses"/,
@@ -164,10 +184,10 @@ test("application manifest, preview, apply and gateway verification", async ({
   await expect(page.getByRole("heading", { name: "MiMo Code" })).toBeVisible();
   await expect(page.getByText("/tmp/airoute-mimocode-e2e.json")).toBeVisible();
   await expect(page.getByText(/OpenAI 兼容协议/)).toBeVisible();
-	await expect(page.getByLabel("默认模型").locator("option")).toHaveText([
+	await expectModelOptions(page, [
 		"不设置",
-		"fast → 所有兼容协议",
-		"mimo-v2.5 → OpenAI Chat",
+		"Mock Provider → mock-model → 所有兼容协议",
+		"Mock Provider → mock-model → OpenAI Chat",
 	]);
   await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
     /@ai-sdk\/openai-compatible/,

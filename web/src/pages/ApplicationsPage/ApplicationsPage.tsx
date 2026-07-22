@@ -1,11 +1,12 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Save, ShieldCheck, Trash2, TriangleAlert } from "lucide-react";
 import { api } from "../../app/api";
+import { localizeValue } from "../../app/i18n";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import {
   applicationGatewayURL,
+  applicationRouteOptionLabel,
   applicationRouteOptions,
-  protocolName,
 } from "../../lib";
 import { ApplicationResults } from "./ApplicationResults";
 import type {
@@ -60,6 +61,11 @@ export function ApplicationsPage({
   const [previewError, setPreviewError] = useState("");
   const [editedPreview, setEditedPreview] = useState("");
   const [previewDirty, setPreviewDirty] = useState(false);
+  const previewDirtyRef = useRef(false);
+  const markPreviewDirty = (dirty: boolean) => {
+    previewDirtyRef.current = dirty;
+    setPreviewDirty(dirty);
+  };
   const [verifyResult, setVerifyResult] =
     useState<ApplicationVerifyResult | null>(null);
   const [backups, setBackups] = useState<ApplicationBackup[]>([]);
@@ -205,7 +211,7 @@ export function ApplicationsPage({
     setBackups([]);
     setPreviewResult(null);
     setEditedPreview("");
-    setPreviewDirty(false);
+    markPreviewDirty(false);
     setPreviewView("next");
     setVerifyResult(null);
     loadApplication().catch((error) => setMessage((error as Error).message));
@@ -228,8 +234,10 @@ export function ApplicationsPage({
         })) as ApplicationPreview;
         if (!controller.signal.aborted) {
           setPreviewResult(value);
-          setEditedPreview(previewText(value.content));
-          setPreviewDirty(false);
+          if (!previewDirtyRef.current) {
+            setEditedPreview(previewText(value.content));
+            markPreviewDirty(false);
+          }
           setPreviewError("");
         }
       } catch (error) {
@@ -256,7 +264,7 @@ export function ApplicationsPage({
       })) as ApplicationPreview;
       setPreviewResult(nextPreview);
       setEditedPreview(previewText(nextPreview.content));
-      setPreviewDirty(false);
+      markPreviewDirty(false);
       const result = await api(`/api/apps/${selectedID}/config`, {
         method: "PUT",
         body: JSON.stringify(requestConfig),
@@ -290,7 +298,7 @@ export function ApplicationsPage({
           ? `已写入手动修改的配置，备份 ${result.backup} 已创建。`
           : "已写入手动修改的配置。",
       );
-      setPreviewDirty(false);
+      markPreviewDirty(false);
       await loadApplication();
     } catch (error) {
       setMessage((error as Error).message);
@@ -386,16 +394,23 @@ export function ApplicationsPage({
     key: "model" | "opus_model" | "sonnet_model" | "haiku_model",
     label: string,
   ) {
+    const selectedOption = routeOptions.find((option) => option.alias === value);
+    const selectedLabel = selectedOption
+      ? applicationRouteOptionLabel(selectedOption)
+      : "";
     return (
       <label>
         {label}
         <select
+          aria-label={label}
           value={value}
+          title={selectedLabel || undefined}
           onChange={(event) => {
-            const option = routeOptions.find((item) => item.alias === event.target.value);
+            const nextValue = event.target.value;
+            const option = routeOptions.find((item) => item.alias === nextValue);
             setForm({
               ...form,
-              [key]: event.target.value,
+              [key]: nextValue,
               ...(selectedID === "codex" && key === "model"
                 ? { integration_mode: option?.integration_mode || "compatibility" }
                 : {}),
@@ -403,9 +418,13 @@ export function ApplicationsPage({
           }}
         >
           <option value="">不设置</option>
-		  {routeOptions.map((option) => (
-			<option key={option.alias} value={option.alias}>
-              {`${option.alias} → ${option.protocol ? protocolName(option.protocol) : "所有兼容协议"}`}
+          {routeOptions.map((option) => (
+            <option
+              key={option.alias}
+              value={option.alias}
+              title={applicationRouteOptionLabel(option)}
+            >
+              {applicationRouteOptionLabel(option)}
             </option>
           ))}
         </select>
@@ -449,8 +468,8 @@ export function ApplicationsPage({
                   </span>
                 </div>
                 <p>
-                  {appState?.detection.message ||
-                    "将 AI Router 路由安全合并到应用的本机配置。"}
+                  {localizeValue(appState?.detection.message ||
+                    "将 AI Router 路由安全合并到应用的本机配置。")}
                   {appState?.detection.version
                     ? ` · ${appState.detection.version}`
                     : ""}
@@ -561,11 +580,11 @@ export function ApplicationsPage({
                     <div className="application-compatibility-warning" role="alert">
                       <TriangleAlert size={17} />
                       <div>
-                        <b>正在使用 AI Router 兼容转换</b>
+                        <b>{localizeValue("正在使用 AI Router 兼容转换")}</b>
                         <span>
-                          {usesReasoningFallback
+                          {localizeValue(usesReasoningFallback
                             ? "Codex 使用 high 推理等级时通常会同时发送 tools（如 apply_patch、shell 等工具定义）和 reasoning_effort（用于指定模型推理强度）。如果上游 Chat 接口拒绝 tools + reasoning_effort，AI Router 会在工具请求中移除 reasoning_effort 并保留工具调用；普通对话和工具调用仍可正常使用。"
-                            : "Codex 仍使用 Responses；AI Router 会根据检测结果转换协议或修复 custom tools 与 reasoning 差异。能力边界以模型接入检测结果为准。"}
+                            : "Codex 仍使用 Responses；AI Router 会根据检测结果转换协议或修复 custom tools 与 reasoning 差异。能力边界以模型接入检测结果为准。")}
                         </span>
                       </div>
                     </div>
@@ -621,7 +640,7 @@ export function ApplicationsPage({
                   <div
                     className={`application-inline-message ${/已写入|已恢复|已清理|验证通过/.test(message) ? "success" : "error"}`}
                   >
-                    {message}
+                    {localizeValue(message)}
                   </div>
                 )}
 
@@ -682,7 +701,7 @@ export function ApplicationsPage({
                     readOnly={webRedaction}
                     onChange={(event) => {
                       setEditedPreview(event.target.value);
-                      setPreviewDirty(
+                      markPreviewDirty(
                         event.target.value !== previewText(previewResult.content),
                       );
                     }}

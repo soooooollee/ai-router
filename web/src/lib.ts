@@ -85,6 +85,20 @@ export type ApplicationRouteOption = {
   provider_model?: string;
 };
 
+export function applicationRouteOptionLabel(option: ApplicationRouteOption) {
+  const protocol = option.protocol
+    ? protocolName(option.protocol)
+    : "所有兼容协议";
+  const service = (option.provider_name || option.provider_id || "").trim();
+  const model = (option.provider_model || "").trim();
+  if (service && model) {
+    return service.toLocaleLowerCase() === model.toLocaleLowerCase()
+      ? `${model} → ${protocol}`
+      : `${service} → ${model} → ${protocol}`;
+  }
+  return `${option.alias} → ${protocol}`;
+}
+
 export function applicationProtocol(applicationID: string) {
   if (applicationID === "codex") {
     return "openai-responses";
@@ -184,6 +198,21 @@ export function routeIdentifier(model: string) {
       .replace(/[^a-z0-9._-]+/g, "-")
       .replace(/^-+|-+$/g, "") || "model"
   );
+}
+
+export function generatedProviderID(model: string, existingIDs: string[] = []) {
+  const base =
+    model
+      .trim()
+      .toLowerCase()
+      .replace(/[^a-z0-9]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 42) || "model";
+  const occupied = new Set(existingIDs.map((id) => id.trim().toLowerCase()));
+  if (!occupied.has(base)) return base;
+  let index = 2;
+  while (occupied.has(`${base}-${index}`)) index++;
+  return `${base}-${index}`;
 }
 
 export function routeIDTimestamp(date = new Date()) {

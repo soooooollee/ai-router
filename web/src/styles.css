@@ -454,7 +454,7 @@ nav button.active{color:#0f3f8c;box-shadow:none;background:#eef6ff}
 .application-connection-fields label,.application-role-grid label{color:#667287;flex-direction:column;gap:6px;min-width:0;font-size:8px;display:flex}
 .application-connection-fields input,.application-role-grid select{color:#263348;background:#fbfcfe;border:1px solid #d7dfe9;border-radius:7px;outline:0;width:100%;min-width:0;height:34px;padding:0 10px;font-size:9px}
 .application-connection-fields input:focus,.application-role-grid select:focus{background:#fff;border-color:#86aad8;box-shadow:0 0 0 3px #2465bd17}
-.application-role-grid{grid-template-columns:1fr 1fr;gap:10px;display:grid}
+.application-role-grid{grid-template-columns:minmax(0,1fr);gap:10px;display:grid}
 .application-compatibility-warning{color:#8a5700;background:#fff8e8;border:1px solid #efd28e;border-radius:8px;align-items:flex-start;gap:9px;margin-top:12px;padding:10px 12px;display:flex}
 .application-compatibility-warning>div{flex-direction:column;gap:3px;display:flex}
 .application-compatibility-warning b{font-size:10px}
@@ -546,8 +546,8 @@ main{padding-top:22px}
 .table-provider-identity{align-items:flex-start;flex-direction:column;gap:3px}
 .table-provider-identity h3,.table-route-name b{font-size:12px;font-weight:650}
 .table-provider-identity>span{color:#8791a0;font-size:10px}
-.provider-key-value{color:#263f70;font-size:11px}
-.provider-status-column{background:#fbfcfe!important}
+.provider-key-value{color:#44536a;font-size:11px}
+.provider-status-column{background:#fff}
 .route-data-table .ant-table-tbody>tr>td,.provider-data-table .ant-table-tbody>tr>td{background:#fff}
 
 .application-config-workbench{grid-template-columns:270px minmax(0,1fr);min-height:700px}

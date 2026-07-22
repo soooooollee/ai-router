@@ -4,6 +4,33 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.2.6] - 2026-07-22
+
+### How to update
+
+- Shell installer: rerun `curl -fsSL https://raw.githubusercontent.com/soooooollee/ai-router/main/install.sh | sh`.
+- npm: rerun `npm install --global https://github.com/soooooollee/ai-router/releases/latest/download/airoute-cli.tgz`.
+- Homebrew: run `brew update && brew upgrade airoute`.
+- Restart an existing background instance with `air restart`, then confirm the installed release with `air version`.
+
+### Added
+
+- Add an editable model service name to onboarding so identical upstream model IDs from different services remain distinguishable.
+- Generate collision-free provider IDs when the same upstream model is connected more than once.
+
+### Changed
+
+- Show application model choices as `model service → upstream model → client protocol`, while retaining the route alias internally.
+- Use a full-width model selector in application configuration so longer service and model names remain readable.
+- Rename the onboarding `Model Names` field to the localized model-name label.
+
+### Fixed
+
+- Complete Chinese and English localization for model detection progress, capability diagnostics, application verification results, runtime notices and Codex compatibility guidance.
+- Align the API Key column colors and hover behavior with the other model-service table columns.
+- Preserve user-entered model service names during protocol detection and keep generated route targets linked to the correct upstream service.
+- Prevent a late live-preview response from overwriting unsaved manual application configuration edits.
+
 ## [0.2.5] - 2026-07-21
 
 ### Added
@@ -140,7 +167,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.6
 [0.2.5]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.5
 [0.2.4]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.4
 [0.2.3]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.3

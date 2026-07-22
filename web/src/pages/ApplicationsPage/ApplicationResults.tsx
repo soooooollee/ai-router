@@ -1,7 +1,7 @@
 import React from "react";
 import { Check, CircleAlert, RotateCcw, Trash2 } from "lucide-react";
 import type { ApplicationBackup, ApplicationVerifyResult } from "../../types";
-import { currentLocale } from "../../app/i18n";
+import { currentLocale, localizeValue } from "../../app/i18n";
 
 export function ApplicationResults({
   verifyResult,
@@ -36,9 +36,9 @@ export function ApplicationResults({
             <div className="application-verify-stage" key={stage.id}>
               {stage.ok ? <Check size={15} /> : <CircleAlert size={15} />}
               <div>
-                <b>{stage.label}</b>
-                <span>{stage.message}</span>
-                {stage.detail && <small>{stage.detail}</small>}
+                <b>{localizeValue(stage.label)}</b>
+                <span>{localizeValue(stage.message)}</span>
+                {stage.detail && <small>{localizeValue(stage.detail)}</small>}
               </div>
               <em>{stage.latency_ms || 0} ms</em>
             </div>

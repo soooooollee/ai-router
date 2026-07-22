@@ -159,9 +159,11 @@ const zhToEn: Record<string, string> = {
   "原生协议": "Native protocol",
   "用于只能接收 Chat 请求的 API：Codex 仍连接 Responses 地址，AI Router 转换为 Chat 并移除 reasoning_effort。": "For APIs that only accept Chat requests: Codex still connects to the Responses endpoint while AI Router converts requests to Chat and removes reasoning_effort.",
   "模型服务名称": "Service name",
+  "例如：硅基流动 1": "For example: SiliconFlow 1",
   "请输入模型服务的 API Key": "Enter the model service API key",
   "密钥将明文保存到本机 0600 配置和备份中": "The key is stored in the local 0600 configuration and backups.",
   "模型名": "Model names",
+  "模型名称": "Model Names",
   "qwen3, qwen3-coder（多个用逗号分隔）": "qwen3, qwen3-coder (comma-separated)",
   "测试连接并自动识别协议": "Test connection and detect protocol",
   "正在连接并识别…": "Connecting and detecting…",
@@ -179,6 +181,14 @@ const zhToEn: Record<string, string> = {
   "正在验证多轮工具续接": "Validating multi-turn tool continuation",
   "协议能力协商完成": "Protocol capability negotiation completed",
   "正在验证 Codex 与 apply_patch 完整链路": "Validating the full Codex and apply_patch path",
+  "正在优先验证上游 Codex 官方直连能力": "Prioritizing upstream official Codex direct-connection verification",
+  "正在验证上游 Codex 官方直连能力": "Validating upstream official Codex direct-connection capabilities",
+  "正在验证 Anthropic 经 AI Router 的 Codex 完整链路": "Validating the full Codex path from Anthropic through AI Router",
+  "正在并行验证候选协议": "Validating candidate protocols in parallel",
+  "正在并行验证流式输出与 function tools": "Validating streaming and function tools in parallel",
+  "正在并行验证 reasoning 与工具组合": "Validating reasoning and tool combinations in parallel",
+  "Anthropic 经 Router 的 Codex 验证完成": "Codex verification from Anthropic through AI Router completed",
+  "Codex 官方直连验证完成": "Official Codex direct-connection verification completed",
   "Codex 端到端验证完成": "Codex end-to-end validation completed",
   "已生成协议与 Codex 兼容性结论": "Protocol and Codex compatibility result generated",
   "检测连接已结束，但没有收到最终结果": "The detection stream ended without a final result",
@@ -219,6 +229,34 @@ const zhToEn: Record<string, string> = {
   "Codex 经 AI Router 的流式工具调用与多轮续接已验证": "Codex streaming tool calls and multi-turn continuation through AI Router were verified.",
   "Codex 经 AI Router 的流式工具调用与多轮续接已验证；工具请求将关闭 reasoning": "Codex streaming tool calls and multi-turn continuation through AI Router were verified; reasoning will be disabled for tool requests.",
   "Codex 使用 high 推理等级时通常会同时发送 tools（如 apply_patch、shell 等工具定义）和 reasoning_effort（用于指定模型推理强度），但该上游的 /v1/chat/completions 会拒绝同时包含 tools + reasoning_effort 的请求；AI Router 会在工具请求中移除 reasoning_effort 并保留工具调用": "At high reasoning effort, Codex normally sends both tools (such as apply_patch and shell definitions) and reasoning_effort. This upstream /v1/chat/completions endpoint rejects requests containing both, so AI Router removes reasoning_effort from tool requests while preserving tool calls.",
+  "正在使用 AI Router 兼容转换": "Using AI Router compatibility conversion",
+  "Codex 使用 high 推理等级时通常会同时发送 tools（如 apply_patch、shell 等工具定义）和 reasoning_effort（用于指定模型推理强度）。如果上游 Chat 接口拒绝 tools + reasoning_effort，AI Router 会在工具请求中移除 reasoning_effort 并保留工具调用；普通对话和工具调用仍可正常使用。": "At high reasoning effort, Codex normally sends both tools (such as apply_patch and shell definitions) and reasoning_effort (which sets the model's reasoning intensity). If the upstream Chat endpoint rejects tools with reasoning_effort, AI Router removes reasoning_effort from tool requests while preserving tool calls. Regular conversations and tool calls continue to work.",
+  "Codex 仍使用 Responses；AI Router 会根据检测结果转换协议或修复 custom tools 与 reasoning 差异。能力边界以模型接入检测结果为准。": "Codex continues to use Responses. AI Router converts protocols or repairs custom-tool and reasoning differences according to the detection result. The detected model capabilities remain the source of truth.",
+  "API 可连接，但 Codex 能力检测尚未完整执行": "The API is reachable, but Codex capability detection did not complete.",
+  "API 可连接，但流式输出或工具能力尚未得到确定性验证": "The API is reachable, but streaming or tool capabilities could not be verified conclusively.",
+  "流式输出和 function tools 可用，但 reasoning、组合能力或 Codex 多轮链路缺少确定性证据": "Streaming and function tools are available, but reasoning, combined capabilities, or the Codex multi-turn path lack conclusive evidence.",
+  "流式输出和 function tools 已验证，但 tools 与 reasoning 或 Codex 多轮工具链路未完全通过": "Streaming and function tools were verified, but tools with reasoning or the Codex multi-turn tool path did not fully pass.",
+  "上游原生 Responses、Codex custom tools、reasoning 与多轮工具续接均已验证，可使用官方直连": "Native Responses, Codex custom tools, reasoning, and multi-turn tool continuation were all verified. An official direct connection is available.",
+  "上游只提供 OpenAI Chat 或缺少 Codex 原生 custom tools 能力，需要 AI Router 进行兼容转换": "The upstream only provides OpenAI Chat or lacks native Codex custom tools, so AI Router compatibility conversion is required.",
+  "认证、限流、配额、网络或超时导致检测无法完成": "Detection could not complete because of authentication, rate limits, quota, network, or timeout errors.",
+  "已验证的 OpenAI 协议无法同时满足 Codex 的流式输出和 function tools 基本要求": "The verified OpenAI protocols cannot satisfy Codex's basic streaming and function-tool requirements at the same time.",
+  "已验证该协议无法同时满足 Codex 的流式输出和 function tools 基本要求": "The verified protocol cannot satisfy Codex's basic streaming and function-tool requirements at the same time.",
+  "未检测到可访问的 OpenAI 协议端点": "No reachable OpenAI protocol endpoint was detected.",
+  "Codex 经 AI Router 端到端验证超时": "Codex end-to-end verification through AI Router timed out",
+  "Codex 经 AI Router 端到端验证未观察到模型触发 apply_patch custom tool": "Codex end-to-end verification through AI Router did not observe the model invoking the apply_patch custom tool",
+  "Codex 经 AI Router 端到端验证收到 custom tool 调用，但缺少 call ID": "Codex end-to-end verification through AI Router received a custom-tool call without a call ID",
+  "Codex 经 AI Router 的第二轮工具结果续接未完成": "The second Codex tool-result continuation through AI Router did not complete",
+  "Codex 经 AI Router 端到端验证尚未确认": "Codex end-to-end verification through AI Router remains inconclusive",
+  "请求已被接受，但模型未返回工具调用": "The request was accepted, but the model did not return a tool call.",
+  "响应结构不符合预期": "The response schema did not match the expected format.",
+  "流式响应结构不符合预期": "The streaming response schema did not match the expected format.",
+  "返回的流式响应结构不符合预期": "The returned streaming response schema did not match the expected format.",
+  "未观察到模型触发 apply_patch custom tool": "The model was not observed invoking the apply_patch custom tool.",
+  "custom tool 调用缺少 call ID": "The custom-tool call is missing a call ID.",
+  "第二轮工具结果续接失败": "The second tool-result continuation failed.",
+  "请求超时": "Request timed out.",
+  "检测未执行": "Detection was not run.",
+  "验证超时": "Verification timed out.",
   "该上游不能同时处理 Codex tools 与 reasoning；AI Router 会在工具请求中移除 reasoning 并保留工具调用": "This upstream cannot process Codex tools and reasoning together, so AI Router removes reasoning from tool requests while preserving tool calls.",
   "基础请求 ✓": "Basic request ✓",
   "流式 ✓": "Streaming ✓",
@@ -240,6 +278,8 @@ const zhToEn: Record<string, string> = {
   "工具+推理：": "Tools + reasoning: ",
   "多轮续接：": "Multi-turn continuation: ",
   "Codex 端到端：": "Codex end-to-end: ",
+  "Codex 官方直连：": "Official Codex direct connection: ",
+  "经 Router 端到端：": "End-to-end through AI Router: ",
   "逐模型基础验证": "Per-model basic validation",
   "省略请求字段": "Omit request fields",
   "高级设置与识别结果": "Advanced settings and detection results",
@@ -324,6 +364,26 @@ const zhToEn: Record<string, string> = {
 	"检测到 Codex CLI 或 ChatGPT App，但 Codex 无法正常运行": "Codex CLI or ChatGPT App was detected, but Codex could not run correctly.",
 	"Codex CLI 或 ChatGPT App 响应超时": "Codex CLI or ChatGPT App timed out.",
   "MiMo Code 已安装": "MiMo Code installed",
+  "安装检测": "Installation check",
+  "配置检测": "Configuration check",
+  "网关链路": "Gateway connection",
+  "官方直连": "Official direct connection",
+  "配置已同步且文件权限安全": "The configuration is synchronized and file permissions are secure.",
+  "页面配置尚未写入 Claude Code": "The configuration shown here has not been written to Claude Code.",
+  "页面配置尚未写入 Claude App": "The configuration shown here has not been written to Claude App.",
+  "Claude-3p 配置已同步": "The Claude-3p configuration is synchronized.",
+  "配置内容已更新": "The configuration content is up to date.",
+  "没有配置变化": "No configuration changes.",
+  "网关链路验证失败": "Gateway connection verification failed.",
+  "Anthropic 协议链路验证成功": "Anthropic protocol connection verified.",
+  "Claude Code 完整调用成功": "Full Claude Code invocation succeeded.",
+  "Claude Code 调用失败": "Claude Code invocation failed.",
+  "Codex Responses 流式链路验证成功": "Codex Responses streaming connection verified.",
+  "Codex Responses 流式链路验证失败": "Codex Responses streaming connection verification failed.",
+  "MiMo Code 链路验证成功": "MiMo Code connection verified.",
+  "MiMo Code 链路验证失败": "MiMo Code connection verification failed.",
+  "网关地址和默认模型为必填项": "Gateway URL and default model are required.",
+  "网关地址和主模型为必填项": "Gateway URL and primary model are required.",
   "未检测到 Claude Code 命令": "Claude Code command not found",
   "未检测到 Codex 命令": "Codex command not found",
   "未检测到 Codex CLI 命令": "Codex CLI command not found",
@@ -517,6 +577,31 @@ const zhToEn: Record<string, string> = {
 const enToZh = Object.fromEntries(Object.entries(zhToEn).map(([zh, en]) => [en, zh]));
 const attributes = ["aria-label", "placeholder", "title"];
 const dynamicFragments: Array<[string, string]> = [
+	["Codex 经 AI Router 端到端验证未观察到模型触发 apply_patch custom tool", "Codex end-to-end verification through AI Router did not observe the model invoking the apply_patch custom tool"],
+	["Codex 经 AI Router 端到端验证收到 custom tool 调用，但缺少 call ID", "Codex end-to-end verification through AI Router received a custom-tool call without a call ID"],
+	["Codex 经 AI Router 的第二轮工具结果续接未完成", "The second Codex tool-result continuation through AI Router did not complete"],
+	["Codex 经 AI Router 端到端验证尚未确认", "Codex end-to-end verification through AI Router remains inconclusive"],
+	["Codex 经 AI Router 端到端验证超时", "Codex end-to-end verification through AI Router timed out"],
+	["；其余流式输出、function tools、reasoning 与多轮续接均已验证", "; all remaining streaming, function-tool, reasoning, and multi-turn continuation capabilities were verified"],
+	["；流式输出和 function tools 已验证，其他高级能力仍需继续确认", "; streaming and function tools were verified; other advanced capabilities still need confirmation"],
+	["请求已被接受，但模型未返回工具调用", "The request was accepted, but the model did not return a tool call"],
+	["返回的流式响应结构不符合预期", "The returned streaming response schema did not match the expected format"],
+	["流式响应结构不符合预期", "The streaming response schema did not match the expected format"],
+	["响应结构不符合预期", "The response schema did not match the expected format"],
+	["未观察到模型触发 apply_patch custom tool", "The model was not observed invoking the apply_patch custom tool"],
+	["custom tool 调用缺少 call ID", "The custom-tool call is missing a call ID"],
+	["第二轮工具结果续接失败", "The second tool-result continuation failed"],
+	["没有识别出可用协议。", "No usable protocol was detected. "],
+	["检测未执行", "Detection was not run"],
+	["验证超时", "Verification timed out"],
+	["请求超时", "Request timed out"],
+	["尚未确认", "Not confirmed"],
+	["已支持", "Supported"],
+	["未测试", "Not tested"],
+	["不支持", "Unsupported"],
+	["流式输出", "Streaming"],
+	["真实请求已通过", "Live request succeeded"],
+	["使用缓存", "cached"],
 	["Codex 兼容", "Codex compatible"],
 	["工具请求不传 reasoning_effort", "tool requests omit reasoning_effort"],
 	["工具请求不传 reasoning", "tool requests omit reasoning"],
@@ -557,6 +642,11 @@ export function translateValue(value: string, locale: Locale): string {
   value = translated;
   if (locale === "en-US") {
     return value
+      .replace(/（耗时 (\d+(?:\.\d+)?) 秒）/g, " ($1 s)")
+      .replace(/（耗时 (\d+) ms）/g, " ($1 ms)")
+      .replace(/(\d+(?:\.\d+)?) 秒/g, "$1 s")
+      .replace(/（([^（）\n]+)）/g, "($1)")
+      .replaceAll("；", "; ")
       .replace(/^共 (\d+) 个模型服务$/, "$1 model services")
       .replace(/^共 (\d+) 条模型路由$/, "$1 routes")
       .replace(/^显示 (\d+) \/ (\d+)$/, "Showing $1 / $2")
@@ -615,6 +705,10 @@ export function initialLocale(): Locale {
 
 export function currentLocale(): Locale {
   return initialLocale();
+}
+
+export function localizeValue(value: string): string {
+  return translateValue(value, currentLocale());
 }
 
 export function applyLocale(locale: Locale) {

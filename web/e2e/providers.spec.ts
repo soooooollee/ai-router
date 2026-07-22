@@ -4,6 +4,14 @@ import { login } from "./helpers";
 test("provider detection and local API key display", async ({ page }) => {
   await login(page);
   await expect(page.getByText("e2e-provider-key", { exact: true })).toBeVisible();
+  const providerRow = page.getByRole("row").filter({ hasText: "Mock Provider" });
+  const apiAddress = providerRow.locator(".provider-api-column .table-code");
+  const apiKey = providerRow.locator(".provider-status-column .provider-key-value");
+  await expect(apiKey).toHaveCSS("color", await apiAddress.evaluate((element) => getComputedStyle(element).color));
+  await expect(providerRow.locator(".provider-status-column")).toHaveCSS(
+    "background-color",
+    await providerRow.locator(".provider-api-column").evaluate((element) => getComputedStyle(element).backgroundColor),
+  );
   await expect(page.locator(".table-provider-identity > span")).toHaveCount(0);
   await expect(page.getByRole("tab", { name: "全部" })).toHaveCount(0);
   await page.getByRole("button", { name: /删\s*除/ }).first().click();
@@ -18,12 +26,16 @@ test("provider detection and local API key display", async ({ page }) => {
   await page.getByRole("button", { name: "+ 接入模型" }).click();
   await expect(page.getByText("接入协议", { exact: true })).toBeVisible();
   await expect(page.getByText("待自动识别", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("模型服务名称")).toBeVisible();
+  await expect(page.getByLabel("模型名称")).toBeVisible();
+  await expect(page.getByText("Model Names", { exact: true })).toHaveCount(0);
   await expect(page.getByText("检测到本机或局域网模型服务")).toBeHidden();
+  await page.getByLabel("模型服务名称").fill("硅基流动 1");
   await page.getByLabel("API 地址").fill("http://127.0.0.1:19090/v1");
   await expect(page.getByText("检测到本机或局域网模型服务")).toBeVisible();
   await page.getByLabel("API Key").fill("e2e-new-provider-key");
   await expect(page.getByText(/明文保存到本机/)).toBeVisible();
-  await page.getByLabel("Model Names").fill("secondary-model");
+  await page.getByLabel("模型名称").fill("secondary-model");
   const autoRoutes = page.getByLabel("自动生成每个模型的全部协议路由");
   await expect(autoRoutes).toBeChecked();
   await autoRoutes.uncheck();
@@ -45,6 +57,7 @@ test("provider detection and local API key display", async ({ page }) => {
   await expect(page.locator(".compatibility-result.degraded .lucide-triangle-alert")).toBeVisible();
   await expect(page.locator(".compatibility-result > svg")).toHaveCSS("width", "22px");
   await page.getByRole("button", { name: "确认接入并加入模型列表" }).click();
+  await expect(page.getByText("硅基流动 1", { exact: true })).toBeVisible();
   await expect(page.getByText("secondary-model").first()).toBeVisible();
   const secondaryRow = page.getByRole("row").filter({ hasText: "secondary-model" });
   await expect(secondaryRow).toContainText("OpenAI Chat");
@@ -62,7 +75,7 @@ test("provider detection and local API key display", async ({ page }) => {
   await expect(generatedRows.getByText("Gemini", { exact: true })).toHaveCount(1);
   await expect(
     generatedRows.locator(".table-route-target code").filter({
-      hasText: /^secondary-model$/,
+      hasText: /^硅基流动 1 \/ secondary-model$/,
     }),
   ).toHaveCount(4);
 
@@ -70,7 +83,7 @@ test("provider detection and local API key display", async ({ page }) => {
   await page.getByRole("button", { name: "+ 接入模型" }).click();
   await page.getByLabel("API 地址").fill("http://127.0.0.1:19090/anthropic");
   await page.getByLabel("API Key").fill("e2e-mimo-key");
-  await page.getByLabel("Model Names").fill("mimo-v2.5-pro");
+  await page.getByLabel("模型名称").fill("mimo-v2.5-pro");
   await page.getByLabel("确认访问本机或私网模型服务").check();
   await page.getByRole("button", { name: "测试连接并自动识别协议" }).click();
   await expect(page.getByText("API 连接与响应结构验证成功", { exact: true })).toBeVisible();

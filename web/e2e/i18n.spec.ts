@@ -1,6 +1,27 @@
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
+async function visibleChineseText(page: import("@playwright/test").Page, selector: string) {
+  return page.locator(selector).evaluate((root) => {
+    const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    const values: string[] = [];
+    let node = walker.nextNode();
+    while (node) {
+      const element = node.parentElement;
+      if (
+        element &&
+        !element.closest("pre,code,textarea") &&
+        element.getClientRects().length > 0 &&
+        /[\u3400-\u9fff]/.test(node.nodeValue || "")
+      ) {
+        values.push((node.nodeValue || "").trim());
+      }
+      node = walker.nextNode();
+    }
+    return values.filter(Boolean);
+  });
+}
+
 test("switches the management console between Chinese and English", async ({ page }) => {
   await login(page);
   await page.getByLabel("语言").selectOption("en-US");
@@ -8,19 +29,26 @@ test("switches the management console between Chinese and English", async ({ pag
   for (const section of ["Overview", "Models", "Routes", "Applications", "Request Logs", "Settings"]) {
     await page.getByRole("button", { name: section }).click();
     await page.waitForTimeout(section === "Applications" ? 500 : 150);
-    const untranslated = await page.locator("main").evaluate((root) => {
-      const walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
-      const values: string[] = [];
-      let node = walker.nextNode();
-      while (node) {
-        if (!node.parentElement?.closest("pre,code,textarea") && /[\u3400-\u9fff]/.test(node.nodeValue || "")) values.push((node.nodeValue || "").trim());
-        node = walker.nextNode();
-      }
-      return values.filter(Boolean);
-    });
+    const untranslated = await visibleChineseText(page, "main");
     expect(untranslated, `untranslated text in ${section}`).toEqual([]);
   }
+  await page.getByRole("button", { name: "Applications" }).click();
+  await page.getByRole("tab", { name: "Codex CLI / ChatGPT App" }).click();
+  await expect(page.getByLabel("Default model")).toBeVisible();
+  await expect.poll(() => visibleChineseText(page, "main")).toEqual([]);
+  await page.getByRole("button", { name: "Verify connection" }).click();
+  await expect(page.getByText("Verification result", { exact: true })).toBeVisible();
+  await expect.poll(() => visibleChineseText(page, "main")).toEqual([]);
+  await page.getByLabel("Language").selectOption("zh-CN");
+  await expect(page.getByText("正在使用 AI Router 兼容转换", { exact: true })).toBeVisible();
+  await page.getByLabel("语言").selectOption("en-US");
+  await expect(page.getByText("Using AI Router compatibility conversion", { exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Models" }).click();
+  await page.getByRole("button", { name: "Edit" }).first().click();
+  await page.getByRole("button", { name: "Test connection and detect protocol" }).click();
+  await expect(page.getByText("API connection and response schema verified", { exact: true })).toBeVisible();
+  await expect.poll(() => visibleChineseText(page, ".modal")).toEqual([]);
+  await page.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Delete" }).first().click();
   await expect(page.locator(".confirm-dialog")).toContainText("routes left without targets will also be removed");
   await page.getByRole("button", { name: "Cancel" }).click();

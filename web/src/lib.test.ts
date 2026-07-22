@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
   applicationGatewayURL,
+  applicationRouteOptionLabel,
   applicationRouteOptions,
   compact,
   generatedRouteID,
+  generatedProviderID,
   generatedProviderRoutes,
   protocolName,
   providerCodexCompatibilityName,
@@ -110,6 +112,18 @@ describe("presentation helpers", () => {
     ]);
   });
 
+  it("shows the upstream model service in application model options", () => {
+    expect(applicationRouteOptionLabel({
+      alias: "qwen3.6-35b-a3b",
+      protocol: "openai-responses",
+      provider_id: "siliconflow-1",
+      provider_name: "硅基流动 1",
+      provider_model: "Qwen/Qwen3.6-35B-A3B",
+    })).toBe(
+      "硅基流动 1 → Qwen/Qwen3.6-35B-A3B → OpenAI Responses",
+    );
+  });
+
   it("preserves full Codex compatibility in application route options", () => {
     const routes = [{
       id: "mimo-responses",
@@ -154,6 +168,18 @@ describe("presentation helpers", () => {
     expect(generatedRouteID("mimo-v2.5", "openai-chat", timestamp)).toBe(
       "mimo-v2.5-openai-chat-20260714113520123",
     );
+  });
+
+  it("generates a distinct provider ID when the same upstream model is added twice", () => {
+    expect(generatedProviderID("Qwen/Qwen3.6-35B-A3B")).toBe(
+      "qwen-qwen3-6-35b-a3b",
+    );
+    expect(
+      generatedProviderID("Qwen/Qwen3.6-35B-A3B", [
+        "qwen-qwen3-6-35b-a3b",
+        "qwen-qwen3-6-35b-a3b-2",
+      ]),
+    ).toBe("qwen-qwen3-6-35b-a3b-3");
   });
 
   it("generates every protocol route for each new provider model and skips existing matches", () => {

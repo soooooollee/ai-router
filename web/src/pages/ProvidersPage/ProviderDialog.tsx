@@ -2,7 +2,8 @@ import React, { useState } from "react";
 import { Activity, Check, Eye, EyeOff, Save, TriangleAlert } from "lucide-react";
 import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
-import { generatedProviderRoutes, protocolName } from "../../lib";
+import { localizeValue } from "../../app/i18n";
+import { generatedProviderID, generatedProviderRoutes, protocolName } from "../../lib";
 
 type CapabilityCheck = {
   ok: boolean;
@@ -298,11 +299,10 @@ export function ProviderDialog({
         throw new Error(result.codex_compatibility?.message || `没有识别出可用协议。${attempts}`);
       }
       const firstModel = models[0];
-      const generatedID = firstModel
-        .toLowerCase()
-        .replace(/[^a-z0-9]+/g, "-")
-        .replace(/^-|-$/g, "")
-        .slice(0, 42);
+      const generatedID = generatedProviderID(
+        firstModel,
+        (parse(yaml)?.providers || []).map((provider: any) => provider.id || ""),
+      );
       const recommendedOmissions =
         result.codex_compatibility?.recommended_omit_fields || [];
       const recommendedCompatibilityMode =
@@ -321,7 +321,7 @@ export function ProviderDialog({
       setForm((current) => ({
         ...current,
         id: current.id || generatedID || `model-${Date.now()}`,
-        name: current.name || firstModel,
+        name: current.name.trim() || firstModel,
         protocol: result.protocol || current.protocol,
         codex_integration: recommendedIntegrationMode,
         codex_compatibility:
@@ -373,6 +373,10 @@ export function ProviderDialog({
       if (!detection?.ok) throw new Error("请先完成连接测试和协议识别");
       const doc = parse(yaml) || {};
       doc.providers = doc.providers || [];
+      const models = form.models
+        .split(",")
+        .map((model: string) => model.trim())
+        .filter(Boolean);
       const headers = Object.fromEntries(
         form.headers
           .split("\n")
@@ -387,7 +391,7 @@ export function ProviderDialog({
       const value: any = {
         ...raw,
         id: form.id,
-        name: form.name,
+        name: form.name.trim() || models[0],
         profile: form.profile,
         reasoning_mode: form.reasoning_mode,
         ...(form.max_output_tokens
@@ -406,10 +410,7 @@ export function ProviderDialog({
         dynamic_models: form.dynamic_models,
         allow_private_url: form.allow_private_url,
         ...(Object.keys(headers).length ? { headers } : {}),
-        models: form.models
-          .split(",")
-          .map((x: string) => x.trim())
-          .filter(Boolean),
+        models,
       };
       const omitFields = fieldList(form.omit_fields).filter(
         (field) =>
@@ -463,8 +464,16 @@ export function ProviderDialog({
           </div>
           <button onClick={close}>×</button>
         </div>
-        {error && <div className="notice error">{error}</div>}
+        {error && <div className="notice error">{localizeValue(error)}</div>}
         <div className="onboard-fields">
+          <label>
+            模型服务名称
+            <input
+              placeholder="例如：硅基流动 1"
+              value={form.name}
+              onChange={(e) => setForm({ ...form, name: e.target.value })}
+            />
+          </label>
           <label>
             API 地址
             <input
@@ -507,7 +516,7 @@ export function ProviderDialog({
             </small>
           </label>
           <label>
-            Model Names
+            模型名称
             <input
               placeholder="qwen3, qwen3-coder（多个用逗号分隔）"
               value={form.models}
@@ -556,9 +565,9 @@ export function ProviderDialog({
         </div>
         <button className="detect-button" onClick={() => detect(false)} disabled={detecting}>
           <Activity size={16} />
-          {detecting ? detectionProgress || "正在连接并识别…" : "测试连接并自动识别协议"}
+          {detecting ? localizeValue(detectionProgress || "正在连接并识别…") : "测试连接并自动识别协议"}
         </button>
-        {detecting && <div className="detection-progress" role="status"><span /><b>{detectionProgress}</b></div>}
+        {detecting && <div className="detection-progress" role="status"><span /><b>{localizeValue(detectionProgress)}</b></div>}
         <div className="detection-section-label">接入协议</div>
         <div
           className={`detected-protocol-field ${detection?.ok ? "identified" : ""}`}
@@ -578,14 +587,14 @@ export function ProviderDialog({
           <div className="detection-result success">
             <Check size={18} />
             <div>
-              <b>API 连接与响应结构验证成功</b>
-              <span>真实请求已通过 · {detection.latency_ms} ms{detection.cached ? " · 使用缓存" : ""}</span>
+              <b>{localizeValue("API 连接与响应结构验证成功")}</b>
+              <span>{localizeValue(`真实请求已通过 · ${detection.latency_ms} ms${detection.cached ? " · 使用缓存" : ""}`)}</span>
             </div>
           </div>
         )}
         {detection?.cached && (
           <button className="detection-refresh" type="button" onClick={() => detect(true)} disabled={detecting}>
-            强制重新检测
+            {localizeValue("强制重新检测")}
           </button>
         )}
         {detection?.codex_compatibility && detection.codex_compatibility.status !== "full" && (
@@ -594,11 +603,11 @@ export function ProviderDialog({
           >
             <TriangleAlert size={22} />
             <div>
-              <b>{compatibilityTitle(
+              <b>{localizeValue(compatibilityTitle(
                 detection.codex_compatibility.status,
                 detection.codex_compatibility.recommended_integration_mode,
-              )}</b>
-              <span>{detection.codex_compatibility.message}</span>
+              ))}</b>
+              <span>{localizeValue(detection.codex_compatibility.message)}</span>
             </div>
           </div>
         )}
@@ -610,30 +619,30 @@ export function ProviderDialog({
                 <div className="capability-row" key={protocol}>
                   <b>{protocolName(protocol)}</b>
                   <span>
-                    基础请求：{capabilityResultText(report.basic)}
+                    {localizeValue("基础请求：")}{localizeValue(capabilityResultText(report.basic))}
                   </span>
                   {report.streaming && (
-                    <span>流式：{capabilityResultText(report.streaming)}</span>
+                    <span>{localizeValue("流式：")}{localizeValue(capabilityResultText(report.streaming))}</span>
                   )}
                   {report.tools && (
-                    <span>工具：{capabilityResultText(report.tools)}</span>
+                    <span>{localizeValue("工具：")}{localizeValue(capabilityResultText(report.tools))}</span>
                   )}
                   {report.reasoning && (
-                    <span>推理：{capabilityResultText(report.reasoning)}</span>
+                    <span>{localizeValue("推理：")}{localizeValue(capabilityResultText(report.reasoning))}</span>
                   )}
                   {report.tools_with_reasoning && (
                     <span>
-                      工具+推理：{capabilityResultText(report.tools_with_reasoning)}
+                      {localizeValue("工具+推理：")}{localizeValue(capabilityResultText(report.tools_with_reasoning))}
                     </span>
                   )}
-                  {report.tool_round_trip && <span>多轮续接：{capabilityResultText(report.tool_round_trip)}</span>}
-                  {report.codex_direct && <span>Codex 官方直连：{capabilityResultText(report.codex_direct)}</span>}
+                  {report.tool_round_trip && <span>{localizeValue("多轮续接：")}{localizeValue(capabilityResultText(report.tool_round_trip))}</span>}
+                  {report.codex_direct && <span>{localizeValue("Codex 官方直连：")}{localizeValue(capabilityResultText(report.codex_direct))}</span>}
                   {report.codex_end_to_end && (
                     <span>
-                      经 Router 端到端：{capabilityResultText(report.codex_end_to_end)}
+                      {localizeValue("经 Router 端到端：")}{localizeValue(capabilityResultText(report.codex_end_to_end))}
                     </span>
                   )}
-                  {!report.basic.ok && report.basic.error && <small title={report.basic.error}>{report.basic.error.slice(0, 180)}</small>}
+                  {!report.basic.ok && report.basic.error && <small title={localizeValue(report.basic.error)}>{localizeValue(report.basic.error.slice(0, 180))}</small>}
                 </div>
               ))}
             </div>
@@ -642,7 +651,7 @@ export function ProviderDialog({
             <div className="model-probe-list">
               <b>逐模型基础验证</b>
               {Object.entries(detection.model_reports).map(([model, report]) => (
-                <span key={model}>{model} · {capabilityText(report.basic)}</span>
+                <span key={model}>{model} · {localizeValue(capabilityText(report.basic))}</span>
               ))}
             </div>
           )}
@@ -652,13 +661,6 @@ export function ProviderDialog({
               <input
                 value={form.id}
                 onChange={(e) => setForm({ ...form, id: e.target.value })}
-              />
-            </label>
-            <label>
-              显示名称
-              <input
-                value={form.name}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
               />
             </label>
             <label>
