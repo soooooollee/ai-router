@@ -14,6 +14,7 @@ describe("mutateLatestConfig", () => {
   });
 
   it("rebases on the latest configuration and retries one conflict", async () => {
+    vi.stubGlobal("sessionStorage", undefined);
     const fetchMock = vi
       .fn()
       .mockResolvedValueOnce(

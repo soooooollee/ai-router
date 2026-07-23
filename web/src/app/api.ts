@@ -11,7 +11,10 @@ export class APIError extends Error {
 }
 
 export function api(path: string, init: RequestInit = {}) {
-  const token = sessionStorage.getItem("airoute_token") || "";
+  const token =
+    typeof sessionStorage === "undefined"
+      ? ""
+      : sessionStorage.getItem("airoute_token") || "";
   const headers = new Headers(init.headers);
   headers.set("content-type", "application/json");
   if (token) headers.set("authorization", `Bearer ${token}`);

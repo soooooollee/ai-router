@@ -32,6 +32,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Fix the Windows Web console blank page by resolving embedded assets with URL paths instead of Windows filesystem separators, and return 404 for missing script or stylesheet assets instead of serving HTML with the wrong content type.
 - Detect the Microsoft Store/MSIX ChatGPT Windows application through its per-user package registration and execution alias instead of requiring a bundled `codex.exe` in a traditional installation directory, including the current `OpenAI.Codex_2p2nqsd0c76g0` package family whose Start menu display name is ChatGPT.
 - Keep the management console configuration snapshot synchronized with server-side changes and rebase model-service additions or removals onto the latest configuration, with one guarded retry for concurrent updates.
+- Avoid reading browser-only session storage when the Web API client runs in a non-browser test or rendering environment.
 - Remove stored `air_sk_...` credentials and their indexes during the state-schema upgrade; the retired format is no longer accepted by gateway authentication.
 - Store the credential master key separately with `0600` permissions, support multiple HMAC key generations, use constant-time verification, and fail closed when managed authentication state is unavailable.
 - Prevent complete client secrets and HMAC material from entering list/detail APIs, audit events, diagnostics, logs, browser persistence, or backup names.
