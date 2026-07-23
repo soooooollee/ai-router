@@ -117,10 +117,13 @@ func (*Adapter) EncodeRequest(_ context.Context, r *ir.Request) (json.RawMessage
 		base := map[string]any{"role": m.Role}
 		var normal []ir.ContentBlock
 		var calls []any
+		var results []ir.ContentBlock
+		hasNonToolResultContent := false
 		for _, b := range m.Content {
 			switch b.Type {
 			case "reasoning":
 				base["reasoning_content"] = b.Text
+				hasNonToolResultContent = true
 			case "tool_call":
 				var args any
 				if json.Unmarshal(b.Arguments, &args) != nil {
@@ -128,14 +131,27 @@ func (*Adapter) EncodeRequest(_ context.Context, r *ir.Request) (json.RawMessage
 				}
 				calls = append(calls, map[string]any{"id": b.ID, "type": "function", "function": map[string]any{"name": b.Name, "arguments": string(common.Raw(args))}})
 			case "tool_result":
-				base["role"] = "tool"
-				base["tool_call_id"] = b.ID
-				var result any
-				_ = json.Unmarshal(b.Result, &result)
-				base["content"] = result
+				results = append(results, b)
 			default:
 				normal = append(normal, b)
 			}
+		}
+		if len(normal) > 0 || len(calls) > 0 {
+			hasNonToolResultContent = true
+		}
+
+		// Anthropic groups the results of parallel tool calls in one user
+		// message. OpenAI Chat requires one role=tool message per tool_call_id;
+		// placing every result into base would overwrite all but the last one.
+		for _, resultBlock := range results {
+			var result any
+			if json.Unmarshal(resultBlock.Result, &result) != nil {
+				result = string(resultBlock.Result)
+			}
+			msgs = append(msgs, map[string]any{"role": "tool", "tool_call_id": resultBlock.ID, "content": result})
+		}
+		if len(results) > 0 && !hasNonToolResultContent {
+			continue
 		}
 		if len(normal) > 0 {
 			base["content"] = encodeContent(normal)

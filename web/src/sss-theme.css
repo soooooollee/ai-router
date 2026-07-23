@@ -79,6 +79,7 @@ body{margin:0;color:var(--text);background:var(--bg);font-size:14px;line-height:
 .dialog input:not([type="checkbox"]):hover,.dialog select:hover,.dialog textarea:hover,.application-form-panel input:not([type="checkbox"]):hover,.application-form-panel select:hover{border-color:#4096ff}
 .dialog input:not([type="checkbox"]):focus,.dialog select:focus,.dialog textarea:focus,.application-form-panel input:not([type="checkbox"]):focus,.application-form-panel select:focus{border-color:#1677ff;box-shadow:0 0 0 2px rgba(5,145,255,.1)}
 .dialog label,.application-form-panel label{color:#262626;font-size:13px;font-weight:500}.dialog .primary,.dialog .secondary,.application-save-actions button,.settings-editor-actions button{border-radius:6px;font-size:13px;font-weight:500}
+.application-key-empty b{font-size:13px}.application-key-empty span{font-size:12px}.application-key-empty button{min-height:36px;font-size:13px}
 
 /* The console uses a square, tool-like visual language throughout. */
 *{border-radius:0!important}

@@ -26,12 +26,17 @@ test("switches the management console between Chinese and English", async ({ pag
   await login(page);
   await page.getByLabel("语言").selectOption("en-US");
   await expect(page.getByRole("button", { name: "Overview" })).toBeVisible();
-  for (const section of ["Overview", "Models", "Routes", "Applications", "Request Logs", "Settings"]) {
+  for (const section of ["Overview", "Models", "Routes", "Access Keys", "Applications", "Request Logs", "Settings"]) {
     await page.getByRole("button", { name: section }).click();
     await page.waitForTimeout(section === "Applications" ? 500 : 150);
     const untranslated = await visibleChineseText(page, "main");
     expect(untranslated, `untranslated text in ${section}`).toEqual([]);
   }
+  await page.getByRole("button", { name: "Access Keys" }).click();
+  await page.getByRole("button", { name: "Generate key" }).click();
+  await expect(page.getByRole("heading", { name: "Generate access key" })).toBeVisible();
+  await expect.poll(() => visibleChineseText(page, ".modal")).toEqual([]);
+  await page.getByRole("button", { name: "Cancel" }).click();
   await page.getByRole("button", { name: "Applications" }).click();
   await page.getByRole("tab", { name: "Codex CLI / ChatGPT App" }).click();
   await expect(page.getByLabel("Default model")).toBeVisible();

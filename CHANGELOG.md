@@ -4,6 +4,48 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-07-23
+
+### New Features
+
+- Add real one-time client credentials backed by HMAC-SHA256 digests in a private bbolt state database, with client, credential, policy, usage, and audit models scoped for future tenants and projects.
+- Add client and credential lifecycle management for enable, disable, expiry, irreversible revocation, overlapping rotation, soft client deletion, and legacy static-key migration.
+- Add per-client model, protocol, CIDR, RPM, burst, concurrency, daily request, daily Token, and maximum-output limits, including filtered model discovery and protected Anthropic token counting.
+- Add persistent daily and minute usage aggregation, atomic quota reservation and settlement, rejection counts, and client identity snapshots in request logs.
+- Add a localized Access keys console for generating and rotating credentials, displaying a secret once, editing policies, inspecting usage, and enabling authentication without interruption.
+- Add checked client-state backup, verification, and offline restore through `air client-state`, including required HMAC key IDs and the separate local credential master key.
+- Add encrypted, recoverable local managed keys so the Applications page can select a key by name without returning its complete value to the browser.
+- Keep legacy `auth.keys` compatible while enabling the managed store by default; query-string keys remain disabled unless `auth.allow_query_key` is explicitly enabled.
+- Restrict the v0.3 management console and API to loopback peers even when the model gateway is exposed publicly.
+- Persist container client state under `/data` and stop publishing the loopback-only management port from the default Compose deployment.
+- Preview every selected application before any credential deployment write, then back up, apply, and verify each application while retaining the new credential if a target fails.
+- Default Web-created credentials to a 90-day expiry on non-loopback gateways and require explicit confirmation when no rate, concurrency, or daily quota is configured.
+- Present access keys as the primary console object: generating a key creates the internal Client and Policy automatically, while application assignment now happens from a managed-key selector on the Applications page.
+- Generate managed credentials in the conventional `sk-...` format and replace the multi-control application credential area with a native generated-key selector that displays key names only; when no key exists, Applications links directly to key generation.
+- Allow revoked or expired access keys to be permanently deleted from the console, removing their authentication indexes and hiding an empty key owner.
+- Store the default `airoute.yaml` in the operating system's user configuration directory and use that same location for `init`, `start`, `serve`, diagnostics, routes, and probes; `--config` and `AIROUTE_CONFIG` remain available overrides.
+- On first use of the new default location, safely move a legacy `airoute.yaml` from the current working directory so existing Windows Desktop installations keep their configuration without leaving the file behind.
+
+### Bug Fixes
+
+- Fix Windows configuration reads being rejected by a POSIX `0600` permission check. Windows now relies on the ACLs of the user's managed AppData directory instead of synthetic `os.FileMode` bits.
+- Fix the Windows Web console blank page by resolving embedded assets with URL paths instead of Windows filesystem separators, and return 404 for missing script or stylesheet assets instead of serving HTML with the wrong content type.
+- Detect the Microsoft Store/MSIX ChatGPT Windows application through its per-user package registration and execution alias instead of requiring a bundled `codex.exe` in a traditional installation directory, including the current `OpenAI.Codex_2p2nqsd0c76g0` package family whose Start menu display name is ChatGPT.
+- Keep the management console configuration snapshot synchronized with server-side changes and rebase model-service additions or removals onto the latest configuration, with one guarded retry for concurrent updates.
+- Remove stored `air_sk_...` credentials and their indexes during the state-schema upgrade; the retired format is no longer accepted by gateway authentication.
+- Store the credential master key separately with `0600` permissions, support multiple HMAC key generations, use constant-time verification, and fail closed when managed authentication state is unavailable.
+- Prevent complete client secrets and HMAC material from entering list/detail APIs, audit events, diagnostics, logs, browser persistence, or backup names.
+- Encrypt recoverable local keys with AES-256-GCM using a domain-separated key derived from the credential master key; verify the decrypted value against its HMAC before use.
+
+### Upgrade Guide
+
+- Shell installer: rerun `curl -fsSL https://raw.githubusercontent.com/soooooollee/ai-router/main/install.sh | sh`.
+- npm: rerun `npm install --global https://github.com/soooooollee/ai-router/releases/latest/download/airoute-cli.tgz`.
+- Homebrew: run `brew update && brew upgrade airoute`.
+- Docker: pull `ghcr.io/soooooollee/ai-router:v0.3.0`, keep the client-state volume mounted at `/data`, and recreate the container.
+- Restart an existing background instance with `air restart`, then confirm the installed release with `air version`.
+- Existing `airoute.yaml` files in the working directory are migrated automatically to the operating system's user configuration directory on first use. Legacy `auth.keys` continue to work, but retired `air_sk_...` managed keys must be replaced with a newly generated `sk-...` access key.
+
 ## [0.2.6] - 2026-07-22
 
 ### How to update
@@ -167,7 +209,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.3.0...HEAD
+[0.3.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.0
 [0.2.6]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.6
 [0.2.5]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.5
 [0.2.4]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.4

@@ -1,4 +1,4 @@
-import React, { lazy, Suspense, useCallback, useEffect, useState } from "react";
+import React, { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import {
   ArrowUpRight,
   Braces,
@@ -20,6 +20,7 @@ const loadApplicationsPage = () =>
   import("../pages/ApplicationsPage/ApplicationsPage");
 const loadOverviewPage = () => import("../pages/OverviewPage/OverviewPage");
 const loadLogsPage = () => import("../pages/LogsPage/LogsPage");
+const loadClientsPage = () => import("../pages/ClientsPage/ClientsPage");
 const loadProvidersPage = () => import("../pages/ProvidersPage/ProvidersPage");
 const loadRoutesPage = () => import("../pages/RoutesPage/RoutesPage");
 const loadSettingsPage = () => import("../pages/SettingsPage/SettingsPage");
@@ -37,6 +38,11 @@ const OverviewPage = lazy(() =>
 const LogsPage = lazy(() =>
   loadLogsPage().then((module) => ({
     default: module.LogsPage,
+  })),
+);
+const ClientsPage = lazy(() =>
+  loadClientsPage().then((module) => ({
+    default: module.ClientsPage,
   })),
 );
 const ProvidersPage = lazy(() =>
@@ -59,6 +65,7 @@ const pages: { id: Page; label: string; icon: React.ElementType }[] = [
   { id: "overview", label: "运行概览", icon: ChartNoAxesCombined },
   { id: "providers", label: "模型接入", icon: Server },
   { id: "routes", label: "路由配置", icon: Route },
+  { id: "clients", label: "访问密钥", icon: KeyRound },
   { id: "apps", label: "应用配置", icon: Braces },
   { id: "logs", label: "调用日志", icon: ListTree },
   { id: "settings", label: "系统设置", icon: Settings },
@@ -82,6 +89,7 @@ export function App() {
   const [token, setToken] = useState(
     sessionStorage.getItem("airoute_token") || "",
   );
+  const syncingConfig = useRef(false);
   const load = useCallback(async () => {
     setError("");
     try {
@@ -127,6 +135,20 @@ export function App() {
     return () => clearInterval(id);
   }, [load]);
   useEffect(() => {
+    if (
+      !status?.config_version ||
+      !hash ||
+      status.config_version === hash ||
+      syncingConfig.current
+    ) {
+      return;
+    }
+    syncingConfig.current = true;
+    void load().finally(() => {
+      syncingConfig.current = false;
+    });
+  }, [status?.config_version, hash, load]);
+  useEffect(() => {
     // The console is served locally, so warming route chunks after the first
     // paint makes later sidebar navigation immediate without delaying startup.
     const id = window.setTimeout(() => {
@@ -134,6 +156,7 @@ export function App() {
         loadApplicationsPage(),
         loadOverviewPage(),
         loadLogsPage(),
+        loadClientsPage(),
         loadProvidersPage(),
         loadRoutesPage(),
         loadSettingsPage(),
@@ -233,7 +256,6 @@ export function App() {
             <ProvidersPage
               data={config?.providers || []}
               yaml={yaml}
-              hash={hash}
               changed={(y, h) => {
                 setYaml(y);
                 setHash(h);
@@ -256,6 +278,11 @@ export function App() {
             />
           )}
           {page === "logs" && <LogsPage />}
+          {page === "clients" && (
+            <ClientsPage
+              models={Array.from(new Set((config?.routes || []).map((route) => route.match.model || "").filter(Boolean)))}
+            />
+          )}
           {page === "settings" && (
             <SettingsPage
               yaml={yaml}

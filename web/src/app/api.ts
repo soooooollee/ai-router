@@ -1,3 +1,15 @@
+export class APIError extends Error {
+  status: number;
+  data: any;
+
+  constructor(status: number, data: any) {
+    super(data?.error || `HTTP ${status}`);
+    this.name = "APIError";
+    this.status = status;
+    this.data = data;
+  }
+}
+
 export function api(path: string, init: RequestInit = {}) {
   const token = sessionStorage.getItem("airoute_token") || "";
   const headers = new Headers(init.headers);
@@ -14,7 +26,7 @@ export function api(path: string, init: RequestInit = {}) {
       };
     }
     const data = await r.json().catch(() => ({ error: r.statusText }));
-    if (!r.ok) throw new Error(data.error || `HTTP ${r.status}`);
+    if (!r.ok) throw new APIError(r.status, data);
     return data;
   });
 }

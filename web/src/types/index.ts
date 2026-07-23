@@ -1,11 +1,67 @@
 export type Page =
   | "apps"
+  | "clients"
   | "overview"
   | "providers"
   | "routes"
   | "playground"
   | "logs"
   | "settings";
+
+export type ClientPolicy = {
+  id: string;
+  project_id?: string;
+  allowed_models?: string[];
+  allowed_protocols?: string[];
+  allowed_cidrs?: string[];
+  requests_per_minute?: number;
+  burst?: number;
+  max_concurrent?: number;
+  daily_request_limit?: number;
+  daily_input_tokens?: number;
+  daily_output_tokens?: number;
+  max_output_tokens?: number;
+};
+export type ClientCredential = {
+  id: string;
+  client_id: string;
+  kind: "standard" | "managed";
+  prefix: string;
+  recoverable: boolean;
+  status: "active" | "disabled" | "expired" | "revoked";
+  created_at: string;
+  expires_at?: string;
+  last_used_at?: string;
+  revoked_at?: string;
+};
+export type ClientUsageBucket = {
+  requests: number;
+  errors: number;
+  rejected: number;
+  input_tokens: number;
+  output_tokens: number;
+};
+export type GatewayClient = {
+  client: {
+    id: string;
+    name: string;
+    description?: string;
+    status: "active" | "disabled" | "deleted";
+    created_at: string;
+    updated_at: string;
+  };
+  policy: ClientPolicy;
+  credentials: ClientCredential[];
+  active_credentials: number;
+  today: ClientUsageBucket;
+};
+export type ClientListResponse = {
+  clients: GatewayClient[];
+  authentication_enabled: boolean;
+  managed_store: boolean;
+  legacy_keys: { id: string }[];
+  gateway_public: boolean;
+};
 export type Status = {
   status: string;
   version: string;

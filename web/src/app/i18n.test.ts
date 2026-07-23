@@ -57,4 +57,17 @@ describe("application detection localization", () => {
       translateValue("尚未确认 · 请求超时 · 2.0 秒", "en-US"),
     ).toBe("Not confirmed · Request timed out · 2.0 s");
   });
+
+  it("translates client credential lifecycle and deployment controls", () => {
+    for (const value of [
+      "轮换客户端密钥",
+      "生成或轮换专用密钥",
+      "我确认该公网监听客户端不设置速率、并发或每日配额",
+      "标准托管密钥不会在应用配置页重新显示完整内容",
+      "最近使用 / 到期",
+    ]) {
+      expect(translateValue(value, "en-US")).not.toBe(value);
+    }
+    expect(translateValue("2 个有效密钥", "en-US")).toBe("2 active keys");
+  });
 });

@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
+
+	"github.com/zbss/airoute/internal/config"
 )
 
 func TestRuntimeStateRoundTripUsesPrivateFiles(t *testing.T) {
@@ -46,6 +48,52 @@ func TestRuntimeStateRoundTripUsesPrivateFiles(t *testing.T) {
 	removeRuntimeState(statePath, want.PID)
 	if !os.IsNotExist(statError(statePath)) {
 		t.Fatal("state was not removed by its owner PID")
+	}
+}
+
+func TestDefaultConfigPathSharesManagedRuntimeDirectory(t *testing.T) {
+	directory := t.TempDir()
+	t.Setenv("AIROUTE_RUNTIME_DIR", directory)
+	t.Setenv("AIROUTE_CONFIG", "")
+	path, err := defaultConfigPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if path != filepath.Join(directory, configFileName) {
+		t.Fatalf("default config path = %q", path)
+	}
+	override := filepath.Join(t.TempDir(), "custom.yaml")
+	t.Setenv("AIROUTE_CONFIG", override)
+	path, err = defaultConfigPath()
+	if err != nil || path != override {
+		t.Fatalf("environment config path = %q, err=%v", path, err)
+	}
+}
+
+func TestResolveConfigPathMigratesLegacyWorkingDirectoryFile(t *testing.T) {
+	runtimeDirectory := t.TempDir()
+	workingDirectory := t.TempDir()
+	t.Setenv("AIROUTE_RUNTIME_DIR", runtimeDirectory)
+	t.Setenv("AIROUTE_CONFIG", "")
+	t.Chdir(workingDirectory)
+	legacy := filepath.Join(workingDirectory, configFileName)
+	if err := os.WriteFile(legacy, []byte(minimalConfig), 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	resolved, err := resolveConfigPath("")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(runtimeDirectory, configFileName)
+	if resolved != want {
+		t.Fatalf("resolved config path = %q, want %q", resolved, want)
+	}
+	if _, err = config.Load(want); err != nil {
+		t.Fatalf("migrated configuration is invalid: %v", err)
+	}
+	if _, err = os.Stat(legacy); !os.IsNotExist(err) {
+		t.Fatalf("legacy working-directory configuration remains: %v", err)
 	}
 }
 

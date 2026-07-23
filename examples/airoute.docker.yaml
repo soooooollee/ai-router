@@ -2,7 +2,7 @@ version: 1
 
 server:
   listen: 0.0.0.0:12666
-  admin_listen: 0.0.0.0:12667
+  admin_listen: 127.0.0.1:12667
   max_concurrent: 256
 
 admin:
@@ -11,6 +11,8 @@ admin:
 
 auth:
   enabled: true
+  managed_store: true
+  allow_query_key: false
   keys:
     - id: docker-client
       value: ${AIROUTE_CLIENT_KEY}

@@ -1,7 +1,8 @@
 import React, { useState } from "react";
 import { Activity, Check, Eye, EyeOff, Save, TriangleAlert } from "lucide-react";
-import { parse, stringify } from "yaml";
+import { parse } from "yaml";
 import { api } from "../../app/api";
+import { mutateLatestConfig } from "../../app/configMutation";
 import { localizeValue } from "../../app/i18n";
 import { generatedProviderID, generatedProviderRoutes, protocolName } from "../../lib";
 
@@ -203,13 +204,11 @@ function isPrivateProviderURL(value: string) {
 
 export function ProviderDialog({
   yaml,
-  hash,
   existing,
   close,
   saved,
 }: {
   yaml: string;
-  hash: string;
   existing: string | null;
   close: () => void;
   saved: (y: string, h: string) => void;
@@ -371,8 +370,6 @@ export function ProviderDialog({
   async function save() {
     try {
       if (!detection?.ok) throw new Error("请先完成连接测试和协议识别");
-      const doc = parse(yaml) || {};
-      doc.providers = doc.providers || [];
       const models = form.models
         .split(",")
         .map((model: string) => model.trim())
@@ -388,67 +385,76 @@ export function ProviderDialog({
             return [line.slice(0, index).trim(), line.slice(index + 1).trim()];
           }),
       );
-      const value: any = {
-        ...raw,
-        id: form.id,
-        name: form.name.trim() || models[0],
-        profile: form.profile,
-        reasoning_mode: form.reasoning_mode,
-        ...(form.max_output_tokens
-          ? { max_output_tokens: Number(form.max_output_tokens) }
-          : {}),
-        protocol: form.protocol,
-        codex_integration: form.codex_integration || undefined,
-        codex_compatibility: form.codex_compatibility || undefined,
-        compatibility_mode: form.compatibility_mode || undefined,
-        tool_choice_mode: form.tool_choice_mode || undefined,
-        reasoning_history: form.reasoning_history || undefined,
-        reasoning_with_tools: form.reasoning_with_tools || undefined,
-        base_url: form.base_url,
-        api_key: form.api_key,
-        timeout: form.timeout,
-        dynamic_models: form.dynamic_models,
-        allow_private_url: form.allow_private_url,
-        ...(Object.keys(headers).length ? { headers } : {}),
-        models,
-      };
       const omitFields = fieldList(form.omit_fields).filter(
         (field) =>
           !(form.compatibility_mode === "codex-chat" && field === "reasoning_effort"),
       );
-      if (omitFields.length) {
-        value.request_policy = {
-          ...(raw?.request_policy || {}),
-          omit_fields: omitFields,
-        };
-      } else {
-        delete value.request_policy;
-      }
-      if (!form.compatibility_mode) delete value.compatibility_mode;
-      if (!form.codex_integration) delete value.codex_integration;
-      if (!form.codex_compatibility) delete value.codex_compatibility;
-      if (existing === null) {
-        doc.providers.push(value);
-        if (autoCreateRoutes) {
-          doc.routes = doc.routes || [];
-          doc.routes.push(
-            ...generatedProviderRoutes(
-              doc.routes,
-              value.id,
-              value.models,
-            ),
+      const result = await mutateLatestConfig((doc) => {
+        doc.providers = doc.providers || [];
+        const latestRaw = doc.providers.find((provider: any) => provider.id === existing);
+        if (existing !== null && !latestRaw) {
+          throw new Error("模型服务已被其他操作删除，请关闭弹窗后重试");
+        }
+        let providerID = form.id;
+        if (
+          existing === null &&
+          doc.providers.some((provider: any) => provider.id === providerID)
+        ) {
+          providerID = generatedProviderID(
+            models[0],
+            doc.providers.map((provider: any) => provider.id || ""),
           );
         }
-      } else
-        doc.providers = doc.providers.map((p: any) =>
-          p.id === existing ? value : p,
-        );
-      const next = stringify(doc);
-      const r = await api("/api/config", {
-        method: "PUT",
-        body: JSON.stringify({ yaml: next, expected_hash: hash }),
+        const value: any = {
+          ...(latestRaw || raw),
+          id: providerID,
+          name: form.name.trim() || models[0],
+          profile: form.profile,
+          reasoning_mode: form.reasoning_mode,
+          ...(form.max_output_tokens
+            ? { max_output_tokens: Number(form.max_output_tokens) }
+            : {}),
+          protocol: form.protocol,
+          codex_integration: form.codex_integration || undefined,
+          codex_compatibility: form.codex_compatibility || undefined,
+          compatibility_mode: form.compatibility_mode || undefined,
+          tool_choice_mode: form.tool_choice_mode || undefined,
+          reasoning_history: form.reasoning_history || undefined,
+          reasoning_with_tools: form.reasoning_with_tools || undefined,
+          base_url: form.base_url,
+          api_key: form.api_key,
+          timeout: form.timeout,
+          dynamic_models: form.dynamic_models,
+          allow_private_url: form.allow_private_url,
+          ...(Object.keys(headers).length ? { headers } : {}),
+          models,
+        };
+        if (omitFields.length) {
+          value.request_policy = {
+            ...(latestRaw?.request_policy || raw?.request_policy || {}),
+            omit_fields: omitFields,
+          };
+        } else {
+          delete value.request_policy;
+        }
+        if (!form.compatibility_mode) delete value.compatibility_mode;
+        if (!form.codex_integration) delete value.codex_integration;
+        if (!form.codex_compatibility) delete value.codex_compatibility;
+        if (existing === null) {
+          doc.providers.push(value);
+          if (autoCreateRoutes) {
+            doc.routes = doc.routes || [];
+            doc.routes.push(
+              ...generatedProviderRoutes(doc.routes, value.id, value.models),
+            );
+          }
+        } else {
+          doc.providers = doc.providers.map((provider: any) =>
+            provider.id === existing ? value : provider,
+          );
+        }
       });
-      saved(next, r.hash);
+      saved(result.yaml, result.hash);
       close();
     } catch (e) {
       setError((e as Error).message);

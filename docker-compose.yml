@@ -4,13 +4,13 @@ services:
     restart: unless-stopped
     ports:
       - "12666:12666"
-      - "127.0.0.1:12667:12667"
     user: "${AIROUTE_UID:-1000}:${AIROUTE_GID:-1000}"
     volumes:
       # Mount the directory, not a single file: atomic save/backup/rollback all
       # require rename and sibling-file creation in the same filesystem.
       - ./data:/data
     environment:
+      AIROUTE_RUNTIME_DIR: /data
       AIROUTE_ADMIN_TOKEN: ${AIROUTE_ADMIN_TOKEN}
       AIROUTE_CLIENT_KEY: ${AIROUTE_CLIENT_KEY}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}

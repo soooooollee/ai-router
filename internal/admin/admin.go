@@ -7,6 +7,7 @@ import (
 	"embed"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"mime"
@@ -14,6 +15,7 @@ import (
 	"net/http"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -26,6 +28,8 @@ import (
 	"github.com/zbss/airoute/internal/application/codex"
 	"github.com/zbss/airoute/internal/application/mimocode"
 	"github.com/zbss/airoute/internal/auth"
+	"github.com/zbss/airoute/internal/clientauth"
+	"github.com/zbss/airoute/internal/clientstore"
 	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/observe"
 	"github.com/zbss/airoute/internal/protocol"
@@ -54,6 +58,10 @@ type Server struct {
 	Client            *http.Client
 	RestrictedClient  *http.Client
 	Applications      *application.Registry
+	ClientAccess      *clientauth.Manager
+	ClientStore       clientstore.Store
+	CredentialKeys    *clientauth.KeyRing
+	StateDirectory    string
 	failureMu         sync.Mutex
 	failures          map[string][]time.Time
 	healthMu          sync.RWMutex
@@ -96,8 +104,19 @@ func (s *Server) SetGatewayControl(control interface {
 	s.GatewayControl = control
 }
 
+func (s *Server) SetClientManagement(access *clientauth.Manager, store clientstore.Store, keys *clientauth.KeyRing, stateDirectory string) {
+	s.ClientAccess = access
+	s.ClientStore = store
+	s.CredentialKeys = keys
+	s.StateDirectory = stateDirectory
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("x-airoute-request-id", adminRequestID())
+	if s.ClientStore != nil && !loopbackRemote(r.RemoteAddr) {
+		http.Error(w, "admin console is available from loopback only", http.StatusForbidden)
+		return
+	}
 	if !allowedHost(r, s.Config.Get()) {
 		http.Error(w, "forbidden host", 403)
 		return
@@ -191,7 +210,7 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 			apiError(w, 500, statErr)
 			return
 		}
-		if info.Mode().Perm()&0077 != 0 {
+		if !safefile.PermissionsPrivate(info) {
 			jsonOut(w, http.StatusForbidden, map[string]any{"error": "configuration file permissions are too broad; require 0600"})
 			return
 		}
@@ -232,6 +251,8 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.probe(w, r, id)
 	case r.URL.Path == "/api/routes/explain" && (r.Method == "GET" || r.Method == "POST"):
 		s.explain(w, r)
+	case r.URL.Path == "/api/clients" || r.URL.Path == "/api/client-audit" || r.URL.Path == "/api/clients/migrate-legacy" || strings.HasPrefix(r.URL.Path, "/api/clients/") || strings.HasPrefix(r.URL.Path, "/api/credentials/") || strings.HasPrefix(r.URL.Path, "/api/client-state/"):
+		s.clientManagementAPI(w, r)
 	case r.URL.Path == "/api/apps" || strings.HasPrefix(r.URL.Path, "/api/apps/"):
 		s.applicationAPI(w, r)
 	case r.URL.Path == "/api/claude-code/config" && r.Method == "GET":
@@ -360,6 +381,81 @@ func currentApplicationKey(state application.State) string {
 		return value
 	}
 	return ""
+}
+
+func (s *Server) applicationCredential(ctx context.Context, key string) (clientstore.Credential, bool) {
+	key = strings.TrimSpace(key)
+	if key == "" || s.ClientStore == nil || s.CredentialKeys == nil {
+		return clientstore.Credential{}, false
+	}
+	for keyID, digest := range s.CredentialKeys.Digests(key) {
+		credential, err := s.ClientStore.GetCredentialByHMAC(ctx, clientstore.DefaultScope, keyID, digest)
+		if err == nil && s.CredentialKeys.Verify(credential.HMACKeyID, key, credential.SecretHMAC) {
+			return credential, true
+		}
+	}
+	return clientstore.Credential{}, false
+}
+
+func (s *Server) managedApplicationCredential(ctx context.Context, key string) bool {
+	credential, ok := s.applicationCredential(ctx, key)
+	return ok && credential.Kind == clientstore.CredentialManaged
+}
+
+func (s *Server) attachApplicationCredentialMetadata(ctx context.Context, state *application.State, key string) {
+	credential, ok := s.applicationCredential(ctx, key)
+	if !ok {
+		return
+	}
+	if state.Managed == nil {
+		state.Managed = map[string]any{}
+	}
+	state.Managed["airoute_client_credential_prefix"] = credential.Prefix
+	state.Managed["airoute_client_credential_status"] = credential.Status
+	state.Managed["airoute_client_credential_id"] = credential.ID
+	state.Managed["airoute_client_credential_recoverable"] = credential.View().Recoverable
+	if client, clientErr := s.ClientStore.GetClient(ctx, clientstore.DefaultScope, credential.ClientID); clientErr == nil {
+		state.Managed["airoute_client_credential_name"] = client.Name
+	}
+}
+
+func (s *Server) resolveApplicationCredential(ctx context.Context, raw json.RawMessage) (json.RawMessage, string, error) {
+	var desired map[string]any
+	if err := json.Unmarshal(raw, &desired); err != nil {
+		return raw, "", nil
+	}
+	credentialID, _ := desired["credential_id"].(string)
+	credentialID = strings.TrimSpace(credentialID)
+	if credentialID == "" {
+		delete(desired, "credential_id")
+		return raw, "", nil
+	}
+	if s.ClientStore == nil || s.CredentialKeys == nil {
+		return nil, "", errors.New("managed credential selection is unavailable")
+	}
+	credential, err := s.ClientStore.GetCredential(ctx, clientstore.DefaultScope, credentialID)
+	if err != nil {
+		return nil, "", errors.New("selected managed credential was not found")
+	}
+	view := credential.View()
+	if view.Status != clientstore.CredentialActive {
+		return nil, "", fmt.Errorf("selected managed credential is %s", view.Status)
+	}
+	client, err := s.ClientStore.GetClient(ctx, clientstore.DefaultScope, credential.ClientID)
+	if err != nil || client.Status != clientstore.ClientActive {
+		return nil, "", errors.New("selected managed credential is disabled")
+	}
+	secret, err := s.CredentialKeys.Reveal(credential)
+	if err != nil {
+		return nil, "", errors.New("selected credential cannot be written to an application")
+	}
+	desired["api_key"] = secret
+	delete(desired, "credential_id")
+	resolved, err := json.Marshal(desired)
+	if err != nil {
+		return nil, "", err
+	}
+	return resolved, secret, nil
 }
 
 func restoreApplicationMaskedKey(ctx context.Context, adapter application.Adapter, raw json.RawMessage) json.RawMessage {
@@ -538,7 +634,7 @@ func (s *Server) validate(w http.ResponseWriter, r *http.Request, save bool) {
 		return
 	}
 	if save && in.ExpectedHash != "" && in.ExpectedHash != s.Config.Get().Hash {
-		jsonOut(w, 409, map[string]any{"error": "configuration changed since it was loaded"})
+		jsonOut(w, 409, map[string]any{"error": "configuration changed since it was loaded", "code": "configuration_conflict", "current_hash": s.Config.Get().Hash})
 		return
 	}
 	if previousConfig.Logging.WebRedaction && strings.Contains(in.YAML, webRedactionMask) {
@@ -835,8 +931,13 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			apiError(w, http.StatusUnprocessableEntity, readErr)
 			return
 		}
-		if s.Config.Get().Logging.WebRedaction {
+		applicationKey := currentApplicationKey(state)
+		s.attachApplicationCredentialMetadata(r.Context(), &state, applicationKey)
+		if s.Config.Get().Logging.WebRedaction || s.managedApplicationCredential(r.Context(), applicationKey) {
 			redactWebValue(state.Managed)
+			// The prefix and lifecycle status are safe display metadata and must
+			// remain available even when the full managed credential is hidden.
+			s.attachApplicationCredentialMetadata(r.Context(), &state, applicationKey)
 		}
 		jsonOut(w, http.StatusOK, state)
 	case action == "preview" && r.Method == http.MethodPost:
@@ -846,12 +947,19 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		raw = restoreApplicationMaskedKey(r.Context(), adapter, raw)
-		preview, previewErr := adapter.Preview(r.Context(), raw)
-		if previewErr != nil {
-			apiError(w, http.StatusUnprocessableEntity, previewErr)
+		var selectedSecret string
+		raw, selectedSecret, readErr = s.resolveApplicationCredential(r.Context(), raw)
+		if readErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, readErr)
 			return
 		}
-		if s.Config.Get().Logging.WebRedaction {
+		preview, previewErr := adapter.Preview(r.Context(), raw)
+		if previewErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, errors.New(deploymentError(previewErr, selectedSecret)))
+			return
+		}
+		state, _ := adapter.Read(r.Context())
+		if selectedSecret != "" || s.Config.Get().Logging.WebRedaction || s.managedApplicationCredential(r.Context(), currentApplicationKey(state)) {
 			redactApplicationPreview(r.Context(), adapter, &preview)
 		}
 		jsonOut(w, http.StatusOK, preview)
@@ -862,9 +970,15 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		raw = restoreApplicationMaskedKey(r.Context(), adapter, raw)
+		var selectedSecret string
+		raw, selectedSecret, readErr = s.resolveApplicationCredential(r.Context(), raw)
+		if readErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, readErr)
+			return
+		}
 		result, applyErr := adapter.Apply(r.Context(), raw)
 		if applyErr != nil {
-			apiError(w, http.StatusUnprocessableEntity, applyErr)
+			apiError(w, http.StatusUnprocessableEntity, errors.New(deploymentError(applyErr, selectedSecret)))
 			return
 		}
 		jsonOut(w, http.StatusOK, result)
@@ -884,13 +998,24 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if strings.Contains(input.Content, webRedactionMask) {
-			jsonOut(w, http.StatusUnprocessableEntity, map[string]any{"error": "关闭网页脱敏后才能写入手动编辑的配置"})
-			return
+			state, stateErr := adapter.Read(r.Context())
+			key := currentApplicationKey(state)
+			if stateErr != nil || key == "" {
+				jsonOut(w, http.StatusUnprocessableEntity, map[string]any{"error": "masked application credential cannot be restored"})
+				return
+			}
+			input.Content = strings.ReplaceAll(input.Content, webRedactionMask, key)
 		}
 		input.Config = restoreApplicationMaskedKey(r.Context(), adapter, input.Config)
+		resolvedConfig, selectedSecret, resolveErr := s.resolveApplicationCredential(r.Context(), input.Config)
+		if resolveErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, resolveErr)
+			return
+		}
+		input.Config = resolvedConfig
 		result, applyErr := rawAdapter.ApplyRaw(r.Context(), input)
 		if applyErr != nil {
-			apiError(w, http.StatusUnprocessableEntity, applyErr)
+			apiError(w, http.StatusUnprocessableEntity, errors.New(deploymentError(applyErr, selectedSecret)))
 			return
 		}
 		jsonOut(w, http.StatusOK, result)
@@ -914,9 +1039,15 @@ func (s *Server) applicationAPI(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		options.Config = restoreApplicationMaskedKey(r.Context(), adapter, options.Config)
+		var selectedSecret string
+		options.Config, selectedSecret, decodeErr = s.resolveApplicationCredential(r.Context(), options.Config)
+		if decodeErr != nil {
+			apiError(w, http.StatusUnprocessableEntity, decodeErr)
+			return
+		}
 		result, verifyErr := adapter.Verify(r.Context(), options)
 		if verifyErr != nil {
-			apiError(w, http.StatusUnprocessableEntity, verifyErr)
+			apiError(w, http.StatusUnprocessableEntity, errors.New(deploymentError(verifyErr, selectedSecret)))
 			return
 		}
 		jsonOut(w, http.StatusOK, result)
@@ -1190,19 +1321,24 @@ func (s *Server) playground(w http.ResponseWriter, r *http.Request) {
 }
 
 func (s *Server) static(w http.ResponseWriter, r *http.Request) {
-	name := strings.TrimPrefix(filepath.Clean(r.URL.Path), "/")
+	name := strings.TrimPrefix(path.Clean("/"+r.URL.Path), "/")
 	if name == "." || name == "" {
 		name = "index.html"
 	}
 	b, e := assets.ReadFile("webdist/" + name)
 	if e != nil {
+		if path.Ext(name) != "" {
+			http.NotFound(w, r)
+			return
+		}
+		name = "index.html"
 		b, e = assets.ReadFile("webdist/index.html")
 	}
 	if e != nil {
 		http.Error(w, "web console not built", 503)
 		return
 	}
-	if typ := mime.TypeByExtension(filepath.Ext(name)); typ != "" {
+	if typ := mime.TypeByExtension(path.Ext(name)); typ != "" {
 		w.Header().Set("content-type", typ)
 	}
 	w.Header().Set("cache-control", "no-cache")

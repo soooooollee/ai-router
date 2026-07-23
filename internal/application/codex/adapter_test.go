@@ -318,6 +318,44 @@ func TestCodexCombinesDesktopAndCLIDetection(t *testing.T) {
 	}
 }
 
+func TestLooksLikeChatGPTWindowsPackage(t *testing.T) {
+	for _, name := range []string{
+		"OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0",
+		"OpenAI.ChatGPT_abcdefghijk",
+		"ChatGPT_abcdefghijk",
+		"OpenAI.Codex_2p2nqsd0c76g0",
+	} {
+		if !looksLikeChatGPTWindowsPackage(name) {
+			t.Fatalf("ChatGPT package %q was not recognized", name)
+		}
+	}
+	for _, name := range []string{"OpenAI.Codex_abcdefghijk", "Other.Codex_2p2nqsd0c76g0", "Microsoft.WindowsTerminal_8wekyb3d8bbwe", "ChatApp_abcdefghijk"} {
+		if looksLikeChatGPTWindowsPackage(name) {
+			t.Fatalf("unrelated package %q was recognized as ChatGPT", name)
+		}
+	}
+}
+
+func TestLooksLikeOfficialChatGPTWindowsAppID(t *testing.T) {
+	for _, appID := range []string{
+		"OpenAI.Codex_2p2nqsd0c76g0!App",
+		"OpenAI.ChatGPT-Desktop_2p2nqsd0c76g0!App",
+	} {
+		if !looksLikeOfficialChatGPTWindowsAppID(appID) {
+			t.Fatalf("official ChatGPT AppID %q was not recognized", appID)
+		}
+	}
+	for _, appID := range []string{
+		"Other.Codex_2p2nqsd0c76g0!App",
+		"OpenAI.Codex_otherpublisher!App",
+		"OpenAI.ChatGPT-Desktop_otherpublisher!BackgroundTask",
+	} {
+		if looksLikeOfficialChatGPTWindowsAppID(appID) {
+			t.Fatalf("unrelated AppID %q was recognized as ChatGPT", appID)
+		}
+	}
+}
+
 func TestApplyRawAndCleanupValidateTOMLAndPreserveOtherSettings(t *testing.T) {
 	path := filepath.Join(t.TempDir(), ".codex", "config.toml")
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {

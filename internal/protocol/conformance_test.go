@@ -243,6 +243,48 @@ func TestToolCallAndResultRoundTrip(t *testing.T) {
 	}
 }
 
+func TestAnthropicParallelToolResultsConvertToIndividualOpenAIChatMessages(t *testing.T) {
+	anthropicAdapter := anthropic.New()
+	chatAdapter := openaichat.New()
+	request := json.RawMessage(`{
+		"model":"m",
+		"messages":[
+			{"role":"assistant","content":[
+				{"type":"tool_use","id":"call_1","name":"first","input":{}},
+				{"type":"tool_use","id":"call_2","name":"second","input":{}},
+				{"type":"tool_use","id":"call_3","name":"third","input":{}}
+			]},
+			{"role":"user","content":[
+				{"type":"tool_result","tool_use_id":"call_1","content":"one"},
+				{"type":"tool_result","tool_use_id":"call_2","content":"two"},
+				{"type":"tool_result","tool_use_id":"call_3","content":"three"}
+			]}
+		]
+	}`)
+	canonical, _, err := anthropicAdapter.DecodeRequest(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	encoded, _, err := chatAdapter.EncodeRequest(context.Background(), canonical)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var payload map[string]any
+	if err := json.Unmarshal(encoded, &payload); err != nil {
+		t.Fatal(err)
+	}
+	messages := common.Array(payload["messages"])
+	if len(messages) != 4 {
+		t.Fatalf("expected one assistant and three tool messages, got %d: %s", len(messages), encoded)
+	}
+	for index, id := range []string{"call_1", "call_2", "call_3"} {
+		message := common.Map(messages[index+1])
+		if message["role"] != "tool" || message["tool_call_id"] != id {
+			t.Fatalf("tool result %d was not emitted as its own message: %s", index, encoded)
+		}
+	}
+}
+
 func TestReasoningAndStructuredOutputConversion(t *testing.T) {
 	r := adapters()
 	canonical := &ir.Request{Model: "m", Messages: []ir.Message{{Role: "assistant", Content: []ir.ContentBlock{{Type: "reasoning", Text: "think"}, {Type: "text", Text: "answer"}}}}, ResponseFormat: &ir.ResponseFormat{Type: "json_schema", Name: "result", Schema: json.RawMessage(`{"type":"object"}`), Strict: true}}

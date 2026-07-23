@@ -22,7 +22,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zbss/airoute/internal/auth"
+	"github.com/zbss/airoute/internal/clientauth"
 	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/observe"
 	"github.com/zbss/airoute/internal/protocol"
@@ -47,6 +47,7 @@ type Gateway struct {
 	semMu            sync.RWMutex
 	clientMu         sync.RWMutex
 	levelController  *slog.LevelVar
+	ClientAccess     *clientauth.Manager
 	enabled          atomic.Bool
 }
 
@@ -65,8 +66,9 @@ func New(c *config.Store, r *protocol.Registry, logs *observe.Store, metrics *ob
 	return g
 }
 
-func (g *Gateway) SetEnabled(enabled bool) { g.enabled.Store(enabled) }
-func (g *Gateway) IsEnabled() bool         { return g.enabled.Load() }
+func (g *Gateway) SetEnabled(enabled bool)                    { g.enabled.Store(enabled) }
+func (g *Gateway) IsEnabled() bool                            { return g.enabled.Load() }
+func (g *Gateway) SetClientAccess(access *clientauth.Manager) { g.ClientAccess = access }
 
 func runtimeClients(maxConcurrent int) (*http.Client, *http.Client) {
 	redirectPolicy := func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
@@ -194,23 +196,51 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errorOut(w, ir.OpenAIChat, http.StatusRequestHeaderFieldsTooLarge, "invalid_request", "too many request headers", id)
 		return
 	}
-	clientKeyID, ok := auth.ClientKey(r, c)
-	if !ok {
-		errorOut(w, ir.OpenAIChat, 401, "authentication_error", "invalid or missing API key", id)
-		return
+	principal := clientauth.Principal{TenantID: "tenant_default", ProjectID: "project_default", ClientID: "anonymous", ClientName: "Anonymous", Anonymous: true}
+	if g.ClientAccess != nil {
+		var accessErr *clientauth.AccessError
+		principal, accessErr = g.ClientAccess.Authenticate(r, c)
+		if accessErr != nil {
+			g.logRejection(c, requestProtocol(r.URL.Path), id, principal, accessErr.Status, accessErr.Code)
+			errorOut(w, requestProtocol(r.URL.Path), accessErr.Status, accessErr.Code, accessErr.Message, id)
+			return
+		}
+	} else if c.Auth.Enabled {
+		// Tests and embedders that do not install the managed authenticator keep
+		// the legacy static-key path through an ephemeral manager.
+		principal, _ = (&clientauth.Manager{}).Authenticate(r, c)
+		if principal.ClientID == "" {
+			g.logRejection(c, requestProtocol(r.URL.Path), id, principal, http.StatusUnauthorized, "authentication_error")
+			errorOut(w, requestProtocol(r.URL.Path), 401, "authentication_error", "invalid or missing API key", id)
+			return
+		}
 	}
 	if r.URL.Path == "/v1/models" {
-		g.serveModels(w)
+		g.serveModels(w, principal)
 		return
 	}
 	if r.URL.Path == "/v1/messages/count_tokens" || r.URL.Path == "/messages/count_tokens" {
-		g.countTokens(w, r, c, id)
+		if g.ClientAccess != nil {
+			if accessErr := g.ClientAccess.Precheck(r.Context(), principal, ir.Anthropic, r.RemoteAddr); accessErr != nil {
+				g.logRejection(c, ir.Anthropic, id, principal, accessErr.Status, accessErr.Code)
+				errorOut(w, ir.Anthropic, accessErr.Status, accessErr.Code, accessErr.Message, id)
+				return
+			}
+		}
+		g.countTokens(w, r, c, id, principal)
 		return
 	}
 	p, model, ok := protocolFromPath(r.URL.Path)
 	if !ok {
 		errorOut(w, ir.OpenAIChat, 404, "not_found", "unknown gateway endpoint", id)
 		return
+	}
+	if g.ClientAccess != nil {
+		if accessErr := g.ClientAccess.Precheck(r.Context(), principal, p, r.RemoteAddr); accessErr != nil {
+			g.logRejection(c, p, id, principal, accessErr.Status, accessErr.Code)
+			errorOut(w, p, accessErr.Status, accessErr.Code, accessErr.Message, id)
+			return
+		}
 	}
 	g.semMu.RLock()
 	sem := g.sem
@@ -219,6 +249,7 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case sem <- struct{}{}:
 		defer func() { <-sem }()
 	default:
+		g.logRejection(c, p, id, principal, http.StatusTooManyRequests, "gateway_concurrency_limited")
 		errorOut(w, p, http.StatusTooManyRequests, "rate_limited", "gateway concurrency limit reached", id)
 		return
 	}
@@ -231,10 +262,44 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		errorOut(w, p, http.StatusUnsupportedMediaType, "invalid_request", "content-type must be application/json", id)
 		return
 	}
-	g.handle(w, r, c, p, model, id, clientKeyID)
+	g.handle(w, r, c, p, model, id, principal)
 }
 
-func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.Config, id string) {
+func requestProtocol(requestPath string) ir.Protocol {
+	if requestPath == "/v1/messages/count_tokens" || requestPath == "/messages/count_tokens" {
+		return ir.Anthropic
+	}
+	if protocol, _, ok := protocolFromPath(requestPath); ok {
+		return protocol
+	}
+	return ir.OpenAIChat
+}
+
+func (g *Gateway) logRejection(c *config.Config, protocol ir.Protocol, id string, principal clientauth.Principal, status int, reason string) {
+	start := time.Now().UTC()
+	authSource := "unknown"
+	if principal.Legacy {
+		authSource = "legacy"
+	} else if principal.Anonymous {
+		authSource = "anonymous"
+	} else if principal.CredentialID != "" {
+		authSource = "managed"
+	}
+	record := observe.Record{
+		ID: id, StartedAt: start, ClientProtocol: protocol, ClientKeyID: principal.ClientID,
+		ClientID: principal.ClientID, ClientName: principal.ClientName, CredentialID: principal.CredentialID,
+		CredentialPrefix: principal.CredentialPrefix, AuthSource: authSource, ConfigVersion: c.Hash,
+		Status: status, ErrorCode: reason, RejectionReason: reason,
+	}
+	g.Metrics.Requests.Add(1)
+	g.Metrics.Errors.Add(1)
+	g.Metrics.Completed.Add(1)
+	g.Metrics.Record(protocol, "", "", status, 0, 0)
+	g.Logs.Add(record)
+	g.Logger.Info("request rejected", "request_id", id, "client_id", principal.ClientID, "client_protocol", protocol, "status_code", status, "rejection_reason", reason)
+}
+
+func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.Config, id string, principal clientauth.Principal) {
 	if r.Method != "POST" {
 		errorOut(w, ir.Anthropic, 405, "invalid_request", "method not allowed", id)
 		return
@@ -255,6 +320,20 @@ func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.
 		return
 	}
 	req.Model = decodeClaudeAppRouteModel(req.Model)
+	var lease *clientauth.RequestLease
+	countUsage := ir.Usage{}
+	if g.ClientAccess != nil {
+		var accessErr *clientauth.AccessError
+		tokenPrincipal := principal
+		tokenPrincipal.Policy.DailyOutputTokens = 0
+		tokenPrincipal.Policy.MaxOutputTokens = 0
+		lease, accessErr = g.ClientAccess.BeginRequest(r.Context(), tokenPrincipal, req, id)
+		if accessErr != nil {
+			errorOut(w, ir.Anthropic, accessErr.Status, accessErr.Code, accessErr.Message, id)
+			return
+		}
+		defer func() { _ = lease.Finish(context.Background(), countUsage, false) }()
+	}
 	headers := map[string]string{}
 	for key, values := range r.Header {
 		if len(values) > 0 {
@@ -266,12 +345,14 @@ func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.
 		target := decision.Targets[0]
 		if providerprofile.ProviderCapabilities(target.Provider, target.Model).NativeTokenCount {
 			if tokens, nativeErr := g.nativeTokenCount(r.Context(), req, target); nativeErr == nil {
+				countUsage.InputTokens = tokens
 				jsonOut(w, 200, map[string]any{"input_tokens": tokens, "estimated": false, "strategy": "provider-native", "provider": target.Provider.ID, "model": target.Model})
 				return
 			}
 		}
 	}
 	result := (tokencount.Heuristic{}).Count(req)
+	countUsage.InputTokens = result.InputTokens
 	jsonOut(w, 200, result)
 }
 
@@ -347,12 +428,19 @@ func (g *Gateway) nativeTokenCount(ctx context.Context, request *ir.Request, tar
 	return result.InputTokens, nil
 }
 
-func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Config, clientProtocol ir.Protocol, pathModel, id, clientKeyID string) {
+func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Config, clientProtocol ir.Protocol, pathModel, id string, principal clientauth.Principal) {
 	start := time.Now()
+	var clientLease *clientauth.RequestLease
 	g.Logs.Configure(c.Logging.RequestHistory, effectiveLogFile(c))
 	g.Metrics.Requests.Add(1)
 	g.Metrics.InFlight.Add(1)
-	record := observe.Record{ID: id, StartedAt: start, ClientProtocol: clientProtocol, ClientKeyID: clientKeyID, ConfigVersion: c.Hash}
+	authSource := "managed"
+	if principal.Legacy {
+		authSource = "legacy"
+	} else if principal.Anonymous {
+		authSource = "anonymous"
+	}
+	record := observe.Record{ID: id, StartedAt: start, ClientProtocol: clientProtocol, ClientKeyID: principal.ClientID, ClientID: principal.ClientID, ClientName: principal.ClientName, CredentialID: principal.CredentialID, CredentialPrefix: principal.CredentialPrefix, AuthSource: authSource, ConfigVersion: c.Hash}
 	defer func() {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			record.ErrorCode = "client_cancelled"
@@ -362,6 +450,11 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 				record.ErrorCode = "upstream_timeout"
 			}
 			g.Metrics.Timeouts.Add(1)
+		}
+		if clientLease != nil {
+			if err := clientLease.Finish(context.Background(), record.Usage, record.ErrorCode != ""); err != nil {
+				g.Logger.Error("client usage settlement failed", "request_id", id, "client_id", principal.ClientID, "error", err)
+			}
 		}
 		g.Metrics.InFlight.Add(-1)
 		record.DurationMS = time.Since(start).Milliseconds()
@@ -413,6 +506,18 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	canonical.ID = id
 	record.RequestedModel = canonical.Model
 	canonical.Model = decodeClaudeAppRouteModel(canonical.Model)
+	if g.ClientAccess != nil {
+		var accessErr *clientauth.AccessError
+		clientLease, accessErr = g.ClientAccess.BeginRequest(r.Context(), principal, canonical, id)
+		if accessErr != nil {
+			record.Status = accessErr.Status
+			record.ErrorCode = accessErr.Code
+			record.RejectionReason = accessErr.Code
+			g.Metrics.Errors.Add(1)
+			errorOut(w, clientProtocol, accessErr.Status, accessErr.Code, accessErr.Message, id)
+			return
+		}
+	}
 	customTools := customToolNames(canonical)
 	record.Diagnostics = append(record.Diagnostics, diagnostics...)
 	if c.Conversion.RemoteImagePolicy == "reject" && common.HasType(canonical, "image_url") {
@@ -807,9 +912,11 @@ func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.
 				record.FirstTokenMS = time.Since(record.StartedAt).Milliseconds()
 			}
 			if event.Usage != nil {
-				u := *event.Usage
-				lastUsage = &u
-				record.Usage = *event.Usage
+				if lastUsage == nil {
+					lastUsage = &ir.Usage{}
+				}
+				mergeStreamUsage(lastUsage, *event.Usage)
+				record.Usage = *lastUsage
 			}
 			for _, normalized := range normalizer.Push(event) {
 				sequence++
@@ -849,6 +956,18 @@ func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.
 			}
 		}
 	}
+}
+
+func mergeStreamUsage(total *ir.Usage, next ir.Usage) {
+	if total == nil {
+		return
+	}
+	total.InputTokens = max(total.InputTokens, next.InputTokens)
+	total.OutputTokens = max(total.OutputTokens, next.OutputTokens)
+	total.CachedTokens = max(total.CachedTokens, next.CachedTokens)
+	total.ReasoningTokens = max(total.ReasoningTokens, next.ReasoningTokens)
+	total.TotalTokens = max(total.TotalTokens, next.TotalTokens)
+	total.TotalTokens = max(total.TotalTokens, total.InputTokens+total.OutputTokens)
 }
 
 func customToolNames(request *ir.Request) map[string]bool {
@@ -1166,23 +1285,36 @@ func jsonOut(w http.ResponseWriter, status int, v any) {
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
-func (g *Gateway) serveModels(w http.ResponseWriter) {
+func (g *Gateway) serveModels(w http.ResponseWriter, principal clientauth.Principal) {
 	c := g.Config.Get()
 	seen := map[string]bool{}
-	var data []any
+	models := make([]string, 0)
 	for _, p := range c.Providers {
 		for _, m := range p.Models {
 			if !seen[m] {
 				seen[m] = true
-				data = append(data, map[string]any{"id": m, "object": "model", "owned_by": p.ID})
+				models = append(models, m)
 			}
 		}
 	}
 	for _, r := range c.Routes {
 		if r.Match.Model != "" && !strings.ContainsAny(r.Match.Model, "*?[") && !seen[r.Match.Model] {
 			seen[r.Match.Model] = true
-			data = append(data, map[string]any{"id": r.Match.Model, "object": "model", "owned_by": "airoute"})
+			models = append(models, r.Match.Model)
 		}
+	}
+	for _, allowed := range principal.Policy.AllowedModels {
+		if allowed != "" && !strings.ContainsAny(allowed, "*?[") && !seen[allowed] {
+			seen[allowed] = true
+			models = append(models, allowed)
+		}
+	}
+	if g.ClientAccess != nil {
+		models = g.ClientAccess.FilterModels(principal, models)
+	}
+	data := make([]any, 0, len(models))
+	for _, model := range models {
+		data = append(data, map[string]any{"id": model, "object": "model", "owned_by": "airoute"})
 	}
 	jsonOut(w, 200, map[string]any{"object": "list", "data": data})
 }

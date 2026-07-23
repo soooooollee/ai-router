@@ -445,7 +445,7 @@ func (a *Adapter) Verify(ctx context.Context, options application.VerifyOptions)
 		result.Stages = append(result.Stages, stage("configuration", "配置检测", false, "无法检查配置文件权限", statErr.Error(), configStarted))
 		return result, nil
 	}
-	if info.Mode().Perm()&0077 != 0 {
+	if !safefile.PermissionsPrivate(info) {
 		result.OK = false
 		result.Stages = append(result.Stages, stage("configuration", "配置检测", false, "配置文件权限过宽", fmt.Sprintf("%s 权限为 %04o，要求 0600", path, info.Mode().Perm()), configStarted))
 		return result, nil

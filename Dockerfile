@@ -21,8 +21,9 @@ RUN CGO_ENABLED=0 go build -trimpath -ldflags "-s -w -X main.version=${VERSION} 
 FROM alpine:3.22
 RUN apk add --no-cache ca-certificates tzdata && addgroup -S airoute && adduser -S -G airoute airoute
 WORKDIR /data
+ENV AIROUTE_RUNTIME_DIR=/data
 COPY --from=build /air /usr/local/bin/air
 USER airoute
-EXPOSE 12666 12667
+EXPOSE 12666
 ENTRYPOINT ["air"]
 CMD ["serve", "--config", "/data/airoute.yaml"]

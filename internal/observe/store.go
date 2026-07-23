@@ -27,6 +27,12 @@ type Record struct {
 	StartedAt        time.Time       `json:"started_at"`
 	ClientProtocol   ir.Protocol     `json:"client_protocol"`
 	ClientKeyID      string          `json:"client_key_id,omitempty"`
+	ClientID         string          `json:"client_id,omitempty"`
+	ClientName       string          `json:"client_name_snapshot,omitempty"`
+	CredentialID     string          `json:"credential_id,omitempty"`
+	CredentialPrefix string          `json:"credential_prefix,omitempty"`
+	AuthSource       string          `json:"auth_source,omitempty"`
+	RejectionReason  string          `json:"rejection_reason,omitempty"`
 	ConfigVersion    string          `json:"config_version"`
 	RequestedModel   string          `json:"requested_model"`
 	RouteID          string          `json:"route_id"`

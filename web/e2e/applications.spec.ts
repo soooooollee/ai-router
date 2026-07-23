@@ -19,6 +19,13 @@ test("application manifest, preview, apply and gateway verification", async ({
   page,
 }) => {
   await login(page);
+	await page.getByRole("button", { name: "应用配置" }).click();
+	await expect(page.getByText("还没有访问密钥", { exact: true })).toBeVisible();
+	await page.getByRole("button", { name: "生成密钥" }).click();
+	await page.getByRole("button", { name: "生成密钥" }).click();
+	await page.getByLabel("密钥名称").fill("E2E Apps");
+	await page.getByRole("button", { name: "生成 Key" }).click();
+	await page.getByRole("button", { name: "我已保存，关闭" }).click();
   await page.getByRole("button", { name: "应用配置" }).click();
   await expect(
     page.getByRole("heading", { name: "Claude Code" }),
@@ -42,12 +49,14 @@ test("application manifest, preview, apply and gateway verification", async ({
     "title",
     "Mock Provider → mock-model → 所有兼容协议",
   );
-  await page.getByLabel("AI Router 客户端密钥").fill("e2e-client-key");
+  const keyField = page.getByLabel("AI Router 访问密钥");
+  await expect(keyField).toHaveCount(1);
+	await keyField.selectOption({ label: "E2E Apps" });
   await selectModel(page, "Mock Provider → mock-model → 所有兼容协议");
   await expect(page.getByText(/可直接编辑合并后配置/)).toBeVisible();
   await expect(
     page.getByLabel("编辑合并后配置"),
-  ).toHaveValue(/e2e-client-key/);
+  ).toHaveValue(/••••••••/);
   const saveButton = page.getByRole("button", {
     name: "备份并写入",
     exact: true,
@@ -105,7 +114,7 @@ test("application manifest, preview, apply and gateway verification", async ({
   );
   await mergedTab.click();
   await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
-    /e2e-client-key/,
+    /••••••••/,
   );
   const editor = page.getByLabel("编辑合并后配置");
   const editedConfig = JSON.parse(await editor.inputValue());
@@ -143,7 +152,8 @@ test("application manifest, preview, apply and gateway verification", async ({
   await expect(configPath).toBeVisible();
   await expect(configPath).toHaveAttribute("title", /configLibrary\/8f69f2f1/);
   await expect(page.getByText(/保存后需重启 Claude App/)).toBeVisible();
-  await expect(page.getByLabel("AI Router 客户端密钥")).toHaveValue("e2e-client-key");
+	await expect(page.getByLabel("AI Router 访问密钥").locator("option:checked")).toHaveText("E2E Apps");
+	await expect(page.getByLabel("外部 Key")).toHaveCount(0);
   await expect(page.getByLabel("编辑合并后配置")).toHaveValue(
     /inferenceGatewayBaseUrl/,
   );
@@ -154,7 +164,7 @@ test("application manifest, preview, apply and gateway verification", async ({
     page.getByLabel("/tmp/airoute-codex-e2e.toml", { exact: true }),
   ).toBeVisible();
   await expect(page.getByText(/Responses 协议/)).toBeVisible();
-  await expect(page.getByLabel("默认模型")).toHaveCount(1);
+	await expect(page.getByLabel("默认模型")).toHaveCount(1);
 	await expectModelOptions(page, [
 		"不设置",
 		"Mock Provider → mock-model → 所有兼容协议",

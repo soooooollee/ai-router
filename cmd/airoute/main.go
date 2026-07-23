@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
@@ -21,6 +22,8 @@ import (
 	"time"
 
 	"github.com/zbss/airoute/internal/admin"
+	"github.com/zbss/airoute/internal/clientauth"
+	"github.com/zbss/airoute/internal/clientstore"
 	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/gateway"
 	"github.com/zbss/airoute/internal/observe"
@@ -79,6 +82,8 @@ func run(args []string) error {
 		return providerToken(args)
 	case "status":
 		return status(args)
+	case "client-state":
+		return clientStateCommand(args)
 	case "ui":
 		return ui(args)
 	case "version", "--version", "-v":
@@ -96,20 +101,23 @@ func usage() {
 	fmt.Print(`AI Router — compact AI protocol conversion gateway
 
 Usage:
-  air init     [--config airoute.yaml]
-  air start    [--config airoute.yaml] [--foreground]
+  air init     [--config PATH]
+  air start    [--config PATH] [--foreground]
   air stop
-  air restart  [--config airoute.yaml]
+  air restart  [--config PATH]
   air logs     [--lines 100] [--follow]
-  air serve    [--config airoute.yaml]
-  air check    [--config airoute.yaml] [--json]
-  air doctor   [--config airoute.yaml] [--json]
+  air serve    [--config PATH]
+  air check    [--config PATH] [--json]
+  air doctor   [--config PATH] [--json]
   air status   [--url http://127.0.0.1:12667] [--token TOKEN]
+  air client-state backup [--output PATH]
+  air client-state verify --backup PATH
+  air client-state restore --backup PATH
   air ui       [--url http://127.0.0.1:12667]
-  air models   [--config airoute.yaml] [--json]
-  air routes   [--config airoute.yaml] [--json]
-  air probe    [--config airoute.yaml] --provider ID [--json]
-  air provider-token [--config airoute.yaml] --provider ID
+  air models   [--config PATH] [--json]
+  air routes   [--config PATH] [--json]
+  air probe    [--config PATH] --provider ID [--json]
+  air provider-token [--config PATH] --provider ID
   air convert  --from openai-chat --to anthropic-messages [file]
   air version
 `)
@@ -134,10 +142,14 @@ func providerToken(args []string) error {
 			return err
 		}
 		state, err := loadRuntimeState(statePath)
-		if err != nil {
-			return fmt.Errorf("locate running AI Router config: %w", err)
+		if err == nil {
+			*path = state.ConfigPath
+		} else {
+			*path, err = defaultConfigPath()
+			if err != nil {
+				return err
+			}
 		}
-		*path = state.ConfigPath
 	}
 	current, err := config.Load(*path)
 	if err != nil {
@@ -188,11 +200,16 @@ metrics:
 
 func initConfig(args []string) error {
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
-	path := fs.String("config", "airoute.yaml", "configuration file")
+	path := fs.String("config", "", "configuration file; defaults to the user configuration directory")
 	force := fs.Bool("force", false, "replace an existing configuration file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	resolvedPath, err := resolveConfigPath(*path)
+	if err != nil {
+		return err
+	}
+	*path = resolvedPath
 	flags := os.O_WRONLY | os.O_CREATE | os.O_EXCL
 	if *force {
 		flags = os.O_WRONLY | os.O_CREATE | os.O_TRUNC
@@ -224,23 +241,33 @@ func registry() *protocol.Registry {
 }
 func configFlag(name string, args []string) (*config.Config, *flag.FlagSet, error) {
 	fs := flag.NewFlagSet(name, flag.ContinueOnError)
-	path := fs.String("config", "airoute.yaml", "configuration file")
+	path := fs.String("config", "", "configuration file; defaults to the user configuration directory")
 	jsonMode := fs.Bool("json", false, "JSON output")
 	_ = jsonMode
 	if err := fs.Parse(args); err != nil {
 		return nil, fs, err
 	}
+	resolvedPath, err := resolveConfigPath(*path)
+	if err != nil {
+		return nil, fs, err
+	}
+	*path = resolvedPath
 	c, err := config.Load(*path)
 	return c, fs, err
 }
 
 func serve(args []string) error {
 	fs := flag.NewFlagSet("serve", flag.ContinueOnError)
-	path := fs.String("config", "airoute.yaml", "configuration file")
+	path := fs.String("config", "", "configuration file; defaults to the user configuration directory")
 	runtimeStatePath := fs.String("runtime-state", "", "managed runtime state file")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	resolvedPath, err := resolveConfigPath(*path)
+	if err != nil {
+		return err
+	}
+	*path = resolvedPath
 	if *runtimeStatePath != "" {
 		defer removeRuntimeState(*runtimeStatePath, os.Getpid())
 	}
@@ -257,11 +284,40 @@ func serve(args []string) error {
 	metrics := &observe.Metrics{}
 	logger, levelController := newLogger(c)
 	reg := registry()
+	stateDirectory := ""
+	if *runtimeStatePath != "" {
+		stateDirectory = filepath.Dir(*runtimeStatePath)
+	} else {
+		statePath, _, pathErr := runtimePaths()
+		if pathErr != nil {
+			return pathErr
+		}
+		stateDirectory = filepath.Dir(statePath)
+	}
+	clientState, err := clientstore.Open(filepath.Join(stateDirectory, "gateway-state.db"))
+	if err != nil {
+		return fmt.Errorf("open managed client state (stop any other AI Router instance using this runtime directory): %w", err)
+	}
+	defer clientState.Close()
+	keyRing, err := clientauth.LoadOrCreateKeyRing(filepath.Join(stateDirectory, "credential-master.key"))
+	if err != nil {
+		return fmt.Errorf("load managed credential master key: %w", err)
+	}
+	requiredHMACKeyIDs, err := clientState.RequiredHMACKeyIDs(context.Background())
+	if err != nil {
+		return fmt.Errorf("read managed credential key requirements: %w", err)
+	}
+	if missing := keyRing.Missing(requiredHMACKeyIDs); len(missing) > 0 {
+		return fmt.Errorf("managed client state requires unavailable HMAC master keys: %s", strings.Join(missing, ", "))
+	}
+	clientAccess := clientauth.NewManager(clientState, keyRing)
 	gw := gateway.New(store, reg, logs, metrics, logger)
+	gw.SetClientAccess(clientAccess)
 	gw.SetLogLevelController(levelController)
 	gatewayURL := "http://" + externalHost(c.Server.Listen)
 	adm := admin.New(store, reg, logs, metrics, version, gatewayURL, *path)
 	adm.SetGatewayControl(gw)
+	adm.SetClientManagement(clientAccess, clientState, keyRing, stateDirectory)
 	gatewayServer := &http.Server{Addr: c.Server.Listen, Handler: gw, ReadHeaderTimeout: c.Server.ReadHeaderTimeout, IdleTimeout: 2 * time.Minute}
 	gatewayServer.MaxHeaderBytes = c.Server.MaxHeaderBytes
 	adminServer := &http.Server{Addr: c.Server.AdminListen, Handler: adm, ReadHeaderTimeout: c.Server.ReadHeaderTimeout, IdleTimeout: 2 * time.Minute, MaxHeaderBytes: c.Server.MaxHeaderBytes}
@@ -476,7 +532,7 @@ func models(args []string) error {
 }
 func routes(args []string) error {
 	fs := flag.NewFlagSet("routes", flag.ContinueOnError)
-	path := fs.String("config", "airoute.yaml", "configuration file")
+	path := fs.String("config", "", "configuration file; defaults to the user configuration directory")
 	jsonMode := fs.Bool("json", false, "JSON output")
 	model := fs.String("model", "", "explain a model route")
 	protocolName := fs.String("protocol", string(ir.OpenAIChat), "source protocol")
@@ -485,6 +541,11 @@ func routes(args []string) error {
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	resolvedPath, err := resolveConfigPath(*path)
+	if err != nil {
+		return err
+	}
+	*path = resolvedPath
 	c, err := config.Load(*path)
 	if err != nil {
 		return err
@@ -523,12 +584,17 @@ func routes(args []string) error {
 }
 func probe(args []string) error {
 	fs := flag.NewFlagSet("probe", flag.ContinueOnError)
-	path := fs.String("config", "airoute.yaml", "configuration file")
+	path := fs.String("config", "", "configuration file; defaults to the user configuration directory")
 	id := fs.String("provider", "", "provider id")
 	jsonMode := fs.Bool("json", false, "JSON output")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
+	resolvedPath, err := resolveConfigPath(*path)
+	if err != nil {
+		return err
+	}
+	*path = resolvedPath
 	c, err := config.Load(*path)
 	if err != nil {
 		return err

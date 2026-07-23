@@ -16,11 +16,13 @@ import (
 	"time"
 
 	"github.com/zbss/airoute/internal/config"
+	"github.com/zbss/airoute/internal/safefile"
 )
 
 const (
 	runtimeStateName = "runtime.json"
 	runtimeLogName   = "airoute.log"
+	configFileName   = "airoute.yaml"
 )
 
 type runtimeState struct {
@@ -34,15 +36,19 @@ type runtimeState struct {
 
 func start(args []string) error {
 	fs := flag.NewFlagSet("start", flag.ContinueOnError)
-	path := fs.String("config", "airoute.yaml", "configuration file")
+	path := fs.String("config", "", "configuration file; defaults to the user configuration directory")
 	foreground := fs.Bool("foreground", false, "run in the foreground")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	if *foreground {
-		return serve([]string{"--config", *path})
+	configPath, err := resolveConfigPath(*path)
+	if err != nil {
+		return err
 	}
-	return startBackground(*path)
+	if *foreground {
+		return serve([]string{"--config", configPath})
+	}
+	return startBackground(configPath)
 }
 
 func startBackground(path string) error {
@@ -196,7 +202,10 @@ func restart(args []string) error {
 		if state, stateErr := loadRuntimeState(statePath); stateErr == nil {
 			*path = state.ConfigPath
 		} else {
-			*path = "airoute.yaml"
+			*path, err = defaultConfigPath()
+			if err != nil {
+				return err
+			}
 		}
 	}
 	if err = stopBackground(10*time.Second, true); err != nil {
@@ -252,6 +261,62 @@ func runtimePaths() (statePath, logPath string, err error) {
 		return "", "", fmt.Errorf("secure runtime directory: %w", err)
 	}
 	return filepath.Join(dir, runtimeStateName), filepath.Join(dir, runtimeLogName), nil
+}
+
+func defaultConfigPath() (string, error) {
+	if configured := strings.TrimSpace(os.Getenv("AIROUTE_CONFIG")); configured != "" {
+		return configured, nil
+	}
+	statePath, _, err := runtimePaths()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(statePath), configFileName), nil
+}
+
+func resolveConfigPath(value string) (string, error) {
+	if value = strings.TrimSpace(value); value != "" {
+		return value, nil
+	}
+	target, err := defaultConfigPath()
+	if err != nil {
+		return "", err
+	}
+	if _, err = os.Stat(target); err == nil {
+		return target, nil
+	} else if !errors.Is(err, os.ErrNotExist) {
+		return "", err
+	}
+	legacy, err := filepath.Abs(configFileName)
+	if err != nil {
+		return "", err
+	}
+	targetAbs, err := filepath.Abs(target)
+	if err != nil || strings.EqualFold(legacy, targetAbs) {
+		return target, err
+	}
+	info, err := os.Stat(legacy)
+	if errors.Is(err, os.ErrNotExist) {
+		return target, nil
+	}
+	if err != nil {
+		return "", err
+	}
+	if !info.Mode().IsRegular() {
+		return "", fmt.Errorf("legacy configuration is not a regular file: %s", legacy)
+	}
+	raw, err := os.ReadFile(legacy)
+	if err != nil {
+		return "", fmt.Errorf("read legacy configuration: %w", err)
+	}
+	if err = safefile.AtomicWrite(target, raw, 0600); err != nil {
+		return "", fmt.Errorf("migrate configuration to %s: %w", target, err)
+	}
+	if err = os.Remove(legacy); err != nil {
+		return "", fmt.Errorf("remove migrated configuration %s: %w", legacy, err)
+	}
+	fmt.Fprintf(os.Stderr, "Moved configuration from %s to %s\n", legacy, target)
+	return target, nil
 }
 
 func loadRuntimeState(path string) (runtimeState, error) {

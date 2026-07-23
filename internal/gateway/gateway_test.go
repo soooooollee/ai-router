@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -18,6 +19,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/zbss/airoute/internal/clientauth"
+	"github.com/zbss/airoute/internal/clientstore"
 	"github.com/zbss/airoute/internal/config"
 	"github.com/zbss/airoute/internal/gateway"
 	"github.com/zbss/airoute/internal/observe"
@@ -85,6 +88,185 @@ func TestGatewayAllNonStreamingDirections(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGatewayManagedCredentialPolicyUsageAndRevocation(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	state, err := clientstore.Open(filepath.Join(dir, "gateway-state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	t.Setenv("AIROUTE_CREDENTIAL_MASTER_KEY", "")
+	t.Setenv("AIROUTE_CREDENTIAL_PREVIOUS_KEYS", "")
+	keys, err := clientauth.LoadOrCreateKeyRing(filepath.Join(dir, "credential-master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := clientstore.ClientPolicy{ID: "policy_a", AllowedModels: []string{"alias"}, AllowedProtocols: []ir.Protocol{ir.OpenAIChat}, DailyRequestLimit: 5}
+	client := clientstore.Client{ID: "client_a", Name: "Managed Codex", Status: clientstore.ClientActive, PolicyID: policy.ID}
+	if err = state.CreateClient(context.Background(), clientstore.DefaultScope, client, policy); err != nil {
+		t.Fatal(err)
+	}
+	credential, secret, err := keys.Generate(client.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = state.CreateCredential(context.Background(), clientstore.DefaultScope, credential); err != nil {
+		t.Fatal(err)
+	}
+	c := testConfig(upstream.URL, ir.OpenAIChat)
+	c.Auth.Enabled = true
+	logs := observe.NewStore(10)
+	g := gateway.New(config.NewStore(c), testRegistry(), logs, &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g.SetClientAccess(clientauth.NewManager(state, keys))
+	server := httptest.NewServer(g)
+	defer server.Close()
+
+	_, body := clientRequest(ir.OpenAIChat, false)
+	unauthorized, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	unauthorized.Body.Close()
+	if unauthorized.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("missing key returned %d", unauthorized.StatusCode)
+	}
+
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("authorization", "Bearer "+secret)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("managed request returned %d", response.StatusCode)
+	}
+	usage, err := state.GetUsage(context.Background(), clientstore.DefaultScope, client.ID, clientstore.UsageQuery{})
+	if err != nil || usage.Total.Requests != 1 || usage.Total.InputTokens == 0 {
+		t.Fatalf("managed usage was not recorded: %#v %v", usage, err)
+	}
+	records := logs.List(1)
+	if len(records) != 1 || records[0].ClientID != client.ID || records[0].CredentialID != credential.ID || records[0].AuthSource != "managed" {
+		t.Fatalf("managed principal was not logged: %#v", records)
+	}
+	logged, _ := json.Marshal(records)
+	if bytes.Contains(logged, []byte(secret)) {
+		t.Fatalf("request log contains a complete client credential: %s", logged)
+	}
+
+	responsesRequest, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/responses", strings.NewReader(`{"model":"alias","input":"hello"}`))
+	responsesRequest.Header.Set("content-type", "application/json")
+	responsesRequest.Header.Set("authorization", "Bearer "+secret)
+	denied, err := http.DefaultClient.Do(responsesRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	deniedBody, _ := io.ReadAll(denied.Body)
+	denied.Body.Close()
+	if denied.StatusCode != http.StatusForbidden || !bytes.Contains(deniedBody, []byte("protocol_not_allowed")) {
+		t.Fatalf("protocol policy returned %d: %s", denied.StatusCode, deniedBody)
+	}
+	rejection := logs.List(1)
+	if len(rejection) != 1 || rejection[0].ClientID != client.ID || rejection[0].RejectionReason != "protocol_not_allowed" {
+		t.Fatalf("policy rejection was not logged: %#v", rejection)
+	}
+
+	modelsRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/models", nil)
+	modelsRequest.Header.Set("authorization", "Bearer "+secret)
+	modelsResponse, err := http.DefaultClient.Do(modelsRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	modelsBody, _ := io.ReadAll(modelsResponse.Body)
+	modelsResponse.Body.Close()
+	if !bytes.Contains(modelsBody, []byte(`"id":"alias"`)) || bytes.Contains(modelsBody, []byte(`"id":"upstream-model"`)) {
+		t.Fatalf("model list was not filtered: %s", modelsBody)
+	}
+
+	if err = state.UpdateCredentialStatus(context.Background(), clientstore.DefaultScope, credential.ID, clientstore.CredentialRevoked, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	revokedRequest, _ := http.NewRequest(http.MethodGet, server.URL+"/v1/models", nil)
+	revokedRequest.Header.Set("authorization", "Bearer "+secret)
+	revokedResponse, err := http.DefaultClient.Do(revokedRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	revokedResponse.Body.Close()
+	if revokedResponse.StatusCode != http.StatusForbidden {
+		t.Fatalf("revoked credential returned %d", revokedResponse.StatusCode)
+	}
+}
+
+func TestGatewayManagedCredentialAuthenticatesAllClientProtocols(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer upstream.Close()
+	dir := t.TempDir()
+	state, err := clientstore.Open(filepath.Join(dir, "gateway-state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer state.Close()
+	t.Setenv("AIROUTE_CREDENTIAL_MASTER_KEY", "")
+	t.Setenv("AIROUTE_CREDENTIAL_PREVIOUS_KEYS", "")
+	keys, err := clientauth.LoadOrCreateKeyRing(filepath.Join(dir, "credential-master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy := clientstore.ClientPolicy{ID: "policy_all_protocols", AllowedModels: []string{"alias"}}
+	client := clientstore.Client{ID: "client_all_protocols", Name: "All protocols", Status: clientstore.ClientActive, PolicyID: policy.ID}
+	if err = state.CreateClient(context.Background(), clientstore.DefaultScope, client, policy); err != nil {
+		t.Fatal(err)
+	}
+	credential, secret, err := keys.Generate(client.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = state.CreateCredential(context.Background(), clientstore.DefaultScope, credential); err != nil {
+		t.Fatal(err)
+	}
+	for _, source := range allProtocols() {
+		t.Run(string(source), func(t *testing.T) {
+			cfg := testConfig(upstream.URL, ir.OpenAIChat)
+			cfg.Auth.Enabled = true
+			g := gateway.New(config.NewStore(cfg), testRegistry(), observe.NewStore(20), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+			g.SetClientAccess(clientauth.NewManager(state, keys))
+			server := httptest.NewServer(g)
+			defer server.Close()
+			requestPath, body := clientRequest(source, false)
+			missing, requestErr := http.Post(server.URL+requestPath, "application/json", strings.NewReader(body))
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			missing.Body.Close()
+			if missing.StatusCode != http.StatusUnauthorized {
+				t.Fatalf("missing credential returned %d", missing.StatusCode)
+			}
+			request, _ := http.NewRequest(http.MethodPost, server.URL+requestPath, strings.NewReader(body))
+			request.Header.Set("content-type", "application/json")
+			request.Header.Set("authorization", "Bearer "+secret)
+			response, requestErr := http.DefaultClient.Do(request)
+			if requestErr != nil {
+				t.Fatal(requestErr)
+			}
+			responseBody, _ := io.ReadAll(response.Body)
+			response.Body.Close()
+			if response.StatusCode != http.StatusOK {
+				t.Fatalf("managed %s request returned %d: %s", source, response.StatusCode, responseBody)
+			}
+		})
 	}
 }
 
@@ -266,6 +448,80 @@ func TestFallbackAfterRetryableFailure(t *testing.T) {
 	}
 	if metrics.Fallbacks.Load() != 1 {
 		t.Fatalf("expected one fallback, got %d", metrics.Fallbacks.Load())
+	}
+}
+
+func TestManagedCredentialFallbackSettlesOneClientRequest(t *testing.T) {
+	bad := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusServiceUnavailable) }))
+	defer bad.Close()
+	good := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer good.Close()
+	cfg := testConfig(bad.URL, ir.OpenAIChat)
+	cfg.Providers = append(cfg.Providers, config.Provider{ID: "good", Protocol: ir.OpenAIChat, BaseURL: good.URL, APIKey: "x", Models: []string{"upstream-model"}, Timeout: 2 * time.Second, AllowPrivateURL: true})
+	cfg.DefaultRoute.Targets = append(cfg.DefaultRoute.Targets, config.RouteTarget{Provider: "good", Model: "upstream-model"})
+	cfg.Auth.Enabled = true
+	state, manager, secret, clientID := managedAccessForGateway(t, clientstore.ClientPolicy{})
+	g := gateway.New(config.NewStore(cfg), testRegistry(), observe.NewStore(20), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g.SetClientAccess(manager)
+	server := httptest.NewServer(g)
+	defer server.Close()
+	_, body := clientRequest(ir.OpenAIChat, false)
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("authorization", "Bearer "+secret)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("fallback returned %d", response.StatusCode)
+	}
+	usage, err := state.GetUsage(context.Background(), clientstore.DefaultScope, clientID, clientstore.UsageQuery{})
+	if err != nil || usage.Total.Requests != 1 || usage.Total.InputTokens != 1 || usage.Total.OutputTokens != 1 {
+		t.Fatalf("fallback was settled more than once or lost usage: %#v %v", usage.Total, err)
+	}
+}
+
+func TestManagedCredentialStreamingUsageSettlement(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		for _, event := range []string{
+			"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"m1\",\"usage\":{\"input_tokens\":2}}}\n\n",
+			"event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}\n\n",
+			"event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"hello\"}}\n\n",
+			"event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}\n\n",
+			"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":1}}\n\n",
+			"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+		} {
+			_, _ = io.WriteString(w, event)
+			w.(http.Flusher).Flush()
+		}
+	}))
+	defer upstream.Close()
+	cfg := testConfig(upstream.URL, ir.Anthropic)
+	cfg.Auth.Enabled = true
+	state, manager, secret, clientID := managedAccessForGateway(t, clientstore.ClientPolicy{})
+	g := gateway.New(config.NewStore(cfg), testRegistry(), observe.NewStore(20), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	g.SetClientAccess(manager)
+	server := httptest.NewServer(g)
+	defer server.Close()
+	_, body := clientRequest(ir.OpenAIChat, true)
+	request, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	request.Header.Set("content-type", "application/json")
+	request.Header.Set("authorization", "Bearer "+secret)
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, response.Body)
+	response.Body.Close()
+	usage, err := state.GetUsage(context.Background(), clientstore.DefaultScope, clientID, clientstore.UsageQuery{})
+	if err != nil || usage.Total.Requests != 1 || usage.Total.InputTokens != 2 || usage.Total.OutputTokens != 1 {
+		t.Fatalf("stream usage was not settled from final events: %#v %v", usage.Total, err)
 	}
 }
 
@@ -915,6 +1171,35 @@ func BenchmarkNativeGateway(b *testing.B) {
 		_, _ = io.Copy(io.Discard, resp.Body)
 		resp.Body.Close()
 	}
+}
+
+func managedAccessForGateway(t *testing.T, policy clientstore.ClientPolicy) (*clientstore.BoltStore, *clientauth.Manager, string, string) {
+	t.Helper()
+	directory := t.TempDir()
+	state, err := clientstore.Open(filepath.Join(directory, "gateway-state.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = state.Close() })
+	t.Setenv("AIROUTE_CREDENTIAL_MASTER_KEY", "")
+	t.Setenv("AIROUTE_CREDENTIAL_PREVIOUS_KEYS", "")
+	keys, err := clientauth.LoadOrCreateKeyRing(filepath.Join(directory, "credential-master.key"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy.ID = "policy_managed_gateway"
+	client := clientstore.Client{ID: "client_managed_gateway", Name: "Managed gateway client", Status: clientstore.ClientActive, PolicyID: policy.ID}
+	if err = state.CreateClient(context.Background(), clientstore.DefaultScope, client, policy); err != nil {
+		t.Fatal(err)
+	}
+	credential, secret, err := keys.Generate(client.ID, nil, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = state.CreateCredential(context.Background(), clientstore.DefaultScope, credential); err != nil {
+		t.Fatal(err)
+	}
+	return state, clientauth.NewManager(state, keys), secret, client.ID
 }
 
 func TestLongSoak(t *testing.T) {

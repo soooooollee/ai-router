@@ -12,6 +12,8 @@ admin:
 
 auth:
   enabled: false
+  managed_store: true
+  allow_query_key: false
 
 providers: []
 routes: []

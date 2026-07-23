@@ -8,8 +8,8 @@ import {
   notification,
   type TableColumnsType,
 } from "antd";
-import { parse, stringify } from "yaml";
 import { api } from "../../app/api";
+import { mutateLatestConfig } from "../../app/configMutation";
 import { ConfirmDialog } from "../../components/ConfirmDialog";
 import { protocolName, removeProviderReferences } from "../../lib";
 import { ProviderDialog } from "./ProviderDialog";
@@ -18,12 +18,10 @@ import type { Provider } from "../../types";
 export function ProvidersPage({
   data,
   yaml,
-  hash,
   changed,
 }: {
   data: Provider[];
   yaml: string;
-  hash: string;
   changed: (y: string, h: string) => void;
 }) {
   const [probing, setProbing] = useState("");
@@ -79,14 +77,10 @@ export function ProvidersPage({
     if (!pendingDelete) return;
     setDeleting(true);
     try {
-      const doc = parse(yaml) || {};
-      removeProviderReferences(doc, pendingDelete.id);
-      const next = stringify(doc);
-      const r = await api("/api/config", {
-        method: "PUT",
-        body: JSON.stringify({ yaml: next, expected_hash: hash }),
+      const result = await mutateLatestConfig((document) => {
+        removeProviderReferences(document, pendingDelete.id);
       });
-      changed(next, r.hash);
+      changed(result.yaml, result.hash);
       setPendingDelete(null);
     } catch (e) {
       notice.error({
@@ -213,7 +207,6 @@ export function ProvidersPage({
       {editing !== undefined && (
         <ProviderDialog
           yaml={yaml}
-          hash={hash}
           existing={editing}
           close={() => setEditing(undefined)}
           saved={changed}

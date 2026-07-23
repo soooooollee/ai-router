@@ -63,6 +63,32 @@ func TestEmptyOnboardingConfigurationAllowed(t *testing.T) {
 	}
 }
 
+func TestManagedClientStoreDefaultsAndQueryKeyOptIn(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	raw := "version: 1\nauth:\n  enabled: false\nproviders: []\nroutes: []\n"
+	if err := os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !c.Auth.ManagedStoreEnabled() || c.Auth.AllowQueryKey {
+		t.Fatalf("unexpected auth defaults: %#v", c.Auth)
+	}
+	raw = "version: 1\nauth:\n  enabled: true\n  managed_store: false\n  allow_query_key: true\nproviders: []\nroutes: []\n"
+	if err = os.WriteFile(path, []byte(raw), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c, err = Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c.Auth.ManagedStoreEnabled() || !c.Auth.AllowQueryKey {
+		t.Fatalf("explicit auth settings were ignored: %#v", c.Auth)
+	}
+}
+
 func TestUnknownFieldRejected(t *testing.T) {
 	d := t.TempDir()
 	p := filepath.Join(d, "config.yaml")

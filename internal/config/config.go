@@ -64,9 +64,14 @@ type Admin struct {
 	AllowedHosts []string `yaml:"allowed_hosts" json:"allowed_hosts,omitempty"`
 }
 type Auth struct {
-	Enabled bool     `yaml:"enabled" json:"enabled"`
-	Keys    []APIKey `yaml:"keys" json:"keys"`
+	Enabled       bool     `yaml:"enabled" json:"enabled"`
+	ManagedStore  *bool    `yaml:"managed_store,omitempty" json:"managed_store,omitempty"`
+	AllowQueryKey bool     `yaml:"allow_query_key,omitempty" json:"allow_query_key,omitempty"`
+	Keys          []APIKey `yaml:"keys" json:"keys"`
 }
+
+func (a Auth) ManagedStoreEnabled() bool { return a.ManagedStore == nil || *a.ManagedStore }
+
 type APIKey struct {
 	ID    string `yaml:"id" json:"id"`
 	Value string `yaml:"value" json:"-"`

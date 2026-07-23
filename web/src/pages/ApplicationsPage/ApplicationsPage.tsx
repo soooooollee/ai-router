@@ -17,6 +17,7 @@ import type {
   ApplicationPreview,
   ApplicationState,
   ApplicationVerifyResult,
+  ClientListResponse,
   Status,
 } from "../../types";
 
@@ -40,6 +41,7 @@ export function ApplicationsPage({
   config: AppConfig | null;
 }) {
 	const [apps, setApps] = useState<ApplicationListItem[]>([]);
+	const [clientKeys, setClientKeys] = useState<ClientListResponse | null>(null);
 	const [selectedID, setSelectedID] = useState("claude-code");
 	const routeOptions = useMemo(
 		() => applicationRouteOptions(config?.routes || [], selectedID, config?.providers || []),
@@ -62,6 +64,7 @@ export function ApplicationsPage({
   const [editedPreview, setEditedPreview] = useState("");
   const [previewDirty, setPreviewDirty] = useState(false);
   const previewDirtyRef = useRef(false);
+	const credentialSelectionTouchedRef = useRef(false);
   const markPreviewDirty = (dirty: boolean) => {
     previewDirtyRef.current = dirty;
     setPreviewDirty(dirty);
@@ -71,7 +74,8 @@ export function ApplicationsPage({
   const [backups, setBackups] = useState<ApplicationBackup[]>([]);
   const [form, setForm] = useState({
     base_url: gateway,
-    api_key: config?.auth?.enabled ? "" : "airoute-local",
+	api_key: "",
+    credential_id: "",
     model: fallback,
     integration_mode: "compatibility" as "direct" | "passthrough" | "compatibility",
     opus_model: fallback,
@@ -89,9 +93,16 @@ export function ApplicationsPage({
   const usesReasoningFallback =
     usesCodexCompatibilityFallback &&
     selectedRouteOption?.reasoning_with_tools === "disabled";
+	const selectableKeys = useMemo(() => (clientKeys?.clients || []).flatMap((item) => item.credentials
+		.filter((credential) => credential.recoverable && credential.status === "active" && item.client.status === "active" && credential.prefix.startsWith("sk-"))
+		.map((credential) => ({ credential, client: item.client }))), [clientKeys]);
+	const firstCredentialID = selectableKeys[0]?.credential.id || "";
+	const hasRequiredAccessKey = selectedID === "codex" && form.integration_mode === "direct" || Boolean(firstCredentialID);
   const requestConfig = useMemo(
-    () => ({
-      ...form,
+    () => {
+      return ({
+		...form,
+		credential_id: form.credential_id || firstCredentialID,
       models: aliases,
       ...(selectedID === "codex" && selectedRouteOption
         ? {
@@ -101,8 +112,9 @@ export function ApplicationsPage({
             provider_model: selectedRouteOption.provider_model,
           }
         : {}),
-    }),
-    [aliases, form, selectedID, selectedRouteOption],
+    });
+    },
+    [aliases, firstCredentialID, form, selectedID, selectedRouteOption],
   );
   const [message, setMessage] = useState("");
   const [busy, setBusy] = useState("");
@@ -140,6 +152,7 @@ export function ApplicationsPage({
       },
     );
     setApps(items);
+		api("/api/clients").then((value) => setClientKeys(value as ClientListResponse)).catch(() => setClientKeys(null));
     setSelectedID((current) =>
       items.some((item) => item.manifest.id === current)
         ? current
@@ -159,6 +172,10 @@ export function ApplicationsPage({
     setBackups(backupValue.backups || []);
     if (supportsConfigForm) {
       const managed = state.managed || {};
+			const currentCredentialID = typeof managed.airoute_client_credential_id === "string" && managed.airoute_client_credential_recoverable === true
+				&& typeof managed.airoute_client_credential_prefix === "string" && managed.airoute_client_credential_prefix.startsWith("sk-")
+				? managed.airoute_client_credential_id
+				: "";
       const selected = (candidate: unknown) =>
         typeof candidate === "string" && aliases.includes(candidate)
           ? candidate
@@ -183,11 +200,8 @@ export function ApplicationsPage({
           read("base_url", "ANTHROPIC_BASE_URL"),
           gateway,
         ),
-        api_key:
-          typeof read("api_key", "ANTHROPIC_API_KEY") === "string" &&
-          read("api_key", "ANTHROPIC_API_KEY")
-            ? (read("api_key", "ANTHROPIC_API_KEY") as string)
-            : current.api_key || (config?.auth?.enabled ? "" : "airoute-local"),
+				credential_id: credentialSelectionTouchedRef.current ? current.credential_id : currentCredentialID || firstCredentialID,
+				api_key: "",
         model: selectedModel,
         integration_mode:
           selectedID === "codex"
@@ -200,7 +214,7 @@ export function ApplicationsPage({
         haiku_model: selected(read("haiku_model", "ANTHROPIC_DEFAULT_HAIKU_MODEL")),
       }));
     }
-  }, [aliases, config?.auth?.enabled, fallback, gateway, isClaudeApplication, routeOptions, selectedID, supportsConfigForm]);
+  }, [aliases, fallback, firstCredentialID, gateway, isClaudeApplication, routeOptions, selectedID, supportsConfigForm]);
 
   useEffect(() => {
     loadApplications().catch((error) => setMessage((error as Error).message));
@@ -215,7 +229,11 @@ export function ApplicationsPage({
     setPreviewView("next");
     setVerifyResult(null);
     loadApplication().catch((error) => setMessage((error as Error).message));
-  }, [loadApplication]);
+	}, [loadApplication]);
+
+	useEffect(() => {
+		credentialSelectionTouchedRef.current = false;
+	}, [selectedID]);
 
   useEffect(() => {
     if (!selectedID || !aliases.length || !canPreview) {
@@ -337,7 +355,9 @@ export function ApplicationsPage({
       })) as ApplicationVerifyResult;
       setVerifyResult(result);
       setMessage(
-        result.ok ? "应用链路验证通过。" : "部分验证未通过，请查看阶段详情。",
+        result.ok
+          ? "应用链路验证通过。"
+          : "部分验证未通过，请查看阶段详情。",
       );
     } catch (error) {
       setMessage((error as Error).message);
@@ -538,17 +558,30 @@ export function ApplicationsPage({
                         }
                       />
                     </label>
-                    <label>
-                      AI Router 客户端密钥
-                      <input
-                        type="text"
-                        value={form.api_key}
-                        placeholder="留空则保留现有密钥"
-                        onChange={(event) =>
-                          setForm({ ...form, api_key: event.target.value })
-                        }
-                      />
-                    </label>
+					{selectableKeys.length ? <label className="full">
+						AI Router 访问密钥
+						<select
+							aria-label="AI Router 访问密钥"
+							value={form.credential_id || firstCredentialID}
+							onChange={(event) => {
+								credentialSelectionTouchedRef.current = true;
+								setForm({
+									...form,
+									credential_id: event.target.value,
+									api_key: "",
+								});
+							}}
+						>
+							{selectableKeys.map(({ credential, client }) => <option key={credential.id} value={credential.id}>{client.name}</option>)}
+						</select>
+					</label> : <div className="application-key-empty" role="alert">
+						<TriangleAlert size={17} />
+						<div>
+							<b>还没有访问密钥</b>
+							<span>请先生成一个访问密钥，再继续配置应用。</span>
+						</div>
+						<button type="button" onClick={() => { location.hash = "clients"; }}>生成密钥</button>
+					</div>}
                       </>
                     )}
                   </div>
@@ -563,7 +596,11 @@ export function ApplicationsPage({
                     <span>02</span>
                   </div>
                   <div className="application-role-grid">
-                    {modelSelect(form.model, "model", "默认模型")}
+					{modelSelect(
+						form.model,
+						"model",
+						"默认模型",
+					)}
 					{isClaudeApplication && (
 						<>
 							{modelSelect(
@@ -617,7 +654,7 @@ export function ApplicationsPage({
                     )}
                     {hasCapability("verify") && (
                       <button
-                        disabled={!aliases.length || Boolean(busy)}
+                        disabled={!aliases.length || !hasRequiredAccessKey || Boolean(busy)}
                         onClick={() => verify(false)}
                       >
                         <Check size={15} />
@@ -627,7 +664,7 @@ export function ApplicationsPage({
                     {hasCapability("configure") && (
                       <button
                         className="primary"
-                        disabled={!aliases.length || Boolean(busy)}
+                        disabled={!aliases.length || !hasRequiredAccessKey || Boolean(busy)}
                         onClick={save}
                       >
                         <Save size={15} />
@@ -737,7 +774,7 @@ export function ApplicationsPage({
                   {hasCapability("edit-preview") && (
                     <button
                       disabled={
-                        webRedaction || !previewDirty || Boolean(busy)
+                        webRedaction || !previewDirty || !hasRequiredAccessKey || Boolean(busy)
                       }
                       onClick={saveEditedPreview}
                     >

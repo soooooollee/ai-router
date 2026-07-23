@@ -16,6 +16,8 @@ admin:
 
 auth:
   enabled: true
+  managed_store: true
+  allow_query_key: false
   keys:
     - id: local-client
       value: ${AIROUTE_CLIENT_KEY}

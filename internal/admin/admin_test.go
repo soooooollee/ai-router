@@ -40,6 +40,37 @@ func requestedChatToolName(payload map[string]any) string {
 	return name
 }
 
+func TestStaticAssetsUseURLPathsAndDoNotFallbackToHTML(t *testing.T) {
+	entries, err := assets.ReadDir("webdist/assets")
+	if err != nil {
+		t.Fatal(err)
+	}
+	assetName := ""
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".js") {
+			assetName = entry.Name()
+			break
+		}
+	}
+	if assetName == "" {
+		t.Fatal("embedded JavaScript asset was not found")
+	}
+
+	recorder := httptest.NewRecorder()
+	request := httptest.NewRequest(http.MethodGet, "/assets/"+assetName, nil)
+	(&Server{}).static(recorder, request)
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Header().Get("content-type"), "javascript") || strings.Contains(strings.ToLower(recorder.Body.String()), "<!doctype html") {
+		t.Fatalf("JavaScript asset response is invalid: status=%d type=%q body=%q", recorder.Code, recorder.Header().Get("content-type"), recorder.Body.String()[:min(80, recorder.Body.Len())])
+	}
+
+	recorder = httptest.NewRecorder()
+	request = httptest.NewRequest(http.MethodGet, "/assets/missing-windows-bundle.js", nil)
+	(&Server{}).static(recorder, request)
+	if recorder.Code != http.StatusNotFound {
+		t.Fatalf("missing static asset returned %d instead of 404", recorder.Code)
+	}
+}
+
 func requestedResponsesToolName(payload map[string]any) string {
 	tools, _ := payload["tools"].([]any)
 	if len(tools) == 0 {

@@ -76,6 +76,25 @@ func TestInitConfigCreatesSecureValidConfiguration(t *testing.T) {
 	}
 }
 
+func TestInitConfigDefaultsToUserConfigurationDirectory(t *testing.T) {
+	runtimeDirectory := t.TempDir()
+	workingDirectory := t.TempDir()
+	t.Setenv("AIROUTE_RUNTIME_DIR", runtimeDirectory)
+	t.Setenv("AIROUTE_CONFIG", "")
+	t.Chdir(workingDirectory)
+
+	if err := initConfig(nil); err != nil {
+		t.Fatal(err)
+	}
+	want := filepath.Join(runtimeDirectory, configFileName)
+	if _, err := config.Load(want); err != nil {
+		t.Fatalf("default configuration was not created at %s: %v", want, err)
+	}
+	if _, err := os.Stat(filepath.Join(workingDirectory, configFileName)); !os.IsNotExist(err) {
+		t.Fatalf("configuration leaked into the working directory: %v", err)
+	}
+}
+
 func TestProviderTokenPrintsOnlySelectedCredential(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "airoute.yaml")
 	raw := `version: 1

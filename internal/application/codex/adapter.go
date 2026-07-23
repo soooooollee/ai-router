@@ -195,6 +195,11 @@ func (a *Adapter) Detect(ctx context.Context) (application.Detection, error) {
 			defer group.Done()
 			desktop = detectExecutable(ctx, desktopPath)
 		}()
+	} else if len(a.DesktopExecutables) == 0 {
+		// Store-distributed desktop applications do not necessarily expose an
+		// executable that accepts Codex CLI arguments. Detect their platform
+		// registration separately instead of trying to launch the GUI app.
+		desktop = detectPlatformDesktopApplication(ctx)
 	}
 	group.Wait()
 
@@ -227,6 +232,25 @@ func (a *Adapter) Detect(ctx context.Context) (application.Detection, error) {
 		Version:    strings.Join(versions, " / "),
 		Message:    message,
 	}, nil
+}
+
+func looksLikeChatGPTWindowsPackage(name string) bool {
+	name = strings.ToLower(strings.TrimSpace(name))
+	if strings.Contains(name, "chatgpt") &&
+		(strings.Contains(name, "openai") || strings.HasPrefix(name, "chatgpt")) {
+		return true
+	}
+	// The current Microsoft Store ChatGPT application is registered as
+	// OpenAI.Codex even though its Start menu display name remains ChatGPT.
+	// Match the official Store package-family publisher ID to avoid treating an
+	// unrelated third-party package containing "Codex" as the OpenAI app.
+	return strings.HasPrefix(name, "openai.codex_") && strings.HasSuffix(name, "_2p2nqsd0c76g0")
+}
+
+func looksLikeOfficialChatGPTWindowsAppID(appID string) bool {
+	appID = strings.ToLower(strings.TrimSpace(appID))
+	return strings.HasSuffix(appID, "_2p2nqsd0c76g0!app") &&
+		(strings.HasPrefix(appID, "openai.codex_") || strings.HasPrefix(appID, "openai.chatgpt"))
 }
 
 type executableDetection struct {
