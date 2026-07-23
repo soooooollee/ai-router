@@ -37,6 +37,10 @@ func (*Adapter) DecodeRequest(_ context.Context, raw json.RawMessage) (*ir.Reque
 				if msg.Role == "" {
 					msg.Role = "user"
 				}
+				if msg.Role == "system" || msg.Role == "developer" {
+					r.Instructions = append(r.Instructions, msg.Content...)
+					continue
+				}
 				r.Messages = append(r.Messages, msg)
 			case "function_call":
 				r.Messages = appendCall(r.Messages, ir.ContentBlock{Type: "tool_call", ID: first(common.String(m["call_id"]), common.String(m["id"])), Name: common.String(m["name"]), Arguments: json.RawMessage(common.String(m["arguments"]))})

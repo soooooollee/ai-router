@@ -4,6 +4,24 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.3.1] - 2026-07-23
+
+### New Features
+
+- No new features; this patch release focuses on Codex compatibility with OpenAI-compatible Chat providers.
+
+### Bug Fixes
+
+- Normalize OpenAI Responses `system` and `developer` input messages into protocol-neutral instructions before routing, preventing DeepSeek Chat and other OpenAI-compatible upstreams from rejecting Codex requests with an unsupported `developer` role.
+
+### Upgrade Guide
+
+- Shell installer: rerun `curl -fsSL https://raw.githubusercontent.com/soooooollee/ai-router/main/install.sh | sh`.
+- npm: rerun `npm install --global https://github.com/soooooollee/ai-router/releases/latest/download/airoute-cli.tgz`.
+- Homebrew: run `brew update && brew upgrade airoute`.
+- Docker: pull `ghcr.io/soooooollee/ai-router:v0.3.1`, keep the client-state volume mounted at `/data`, and recreate the container.
+- Restart an existing background instance with `air restart`, then confirm the installed release with `air version`.
+
 ## [0.3.0] - 2026-07-23
 
 ### New Features
@@ -210,7 +228,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.3.0...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.3.1...HEAD
+[0.3.1]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.1
 [0.3.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.0
 [0.2.6]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.6
 [0.2.5]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.5

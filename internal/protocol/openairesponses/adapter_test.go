@@ -7,7 +7,51 @@ import (
 	"testing"
 
 	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/zbss/airoute/internal/protocol/openaichat"
 )
+
+func TestInstructionRolesBecomeChatSystemMessage(t *testing.T) {
+	raw := []byte(`{
+  "model":"deepseek-v4-flash",
+  "instructions":"Top-level instruction.",
+  "input":[
+    {"type":"message","role":"developer","content":[{"type":"input_text","text":"Developer instruction."}]},
+    {"type":"message","role":"system","content":[{"type":"input_text","text":"System instruction."}]},
+    {"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}
+  ]
+}`)
+	request, _, err := New().DecodeRequest(context.Background(), raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(request.Instructions) != 3 || len(request.Messages) != 1 || request.Messages[0].Role != "user" {
+		t.Fatalf("instruction roles were not normalized: %#v", request)
+	}
+
+	encoded, _, err := openaichat.New().EncodeRequest(context.Background(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var document map[string]any
+	if err = json.Unmarshal(encoded, &document); err != nil {
+		t.Fatal(err)
+	}
+	messages, _ := document["messages"].([]any)
+	if len(messages) != 2 {
+		t.Fatalf("unexpected Chat messages: %s", encoded)
+	}
+	first, _ := messages[0].(map[string]any)
+	content, _ := json.Marshal(first["content"])
+	if first["role"] != "system" || !bytes.Contains(content, []byte("Top-level instruction.")) || !bytes.Contains(content, []byte("Developer instruction.")) || !bytes.Contains(content, []byte("System instruction.")) {
+		t.Fatalf("instructions were not encoded as one system message: %s", encoded)
+	}
+	for _, value := range messages {
+		message, _ := value.(map[string]any)
+		if message["role"] == "developer" {
+			t.Fatalf("developer role leaked to Chat upstream: %s", encoded)
+		}
+	}
+}
 
 func TestCustomToolRequestAndHistoryRoundTrip(t *testing.T) {
 	raw := []byte(`{

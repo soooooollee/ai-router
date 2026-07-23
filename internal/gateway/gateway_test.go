@@ -91,6 +91,60 @@ func TestGatewayAllNonStreamingDirections(t *testing.T) {
 	}
 }
 
+func TestGatewayNormalizesResponsesDeveloperRoleForChatUpstream(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Error(err)
+			w.WriteHeader(http.StatusInternalServerError)
+			return
+		}
+		var document map[string]any
+		if err = json.Unmarshal(body, &document); err != nil {
+			t.Errorf("invalid upstream JSON: %v", err)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		messages, _ := document["messages"].([]any)
+		if len(messages) != 2 {
+			t.Errorf("unexpected upstream messages: %s", body)
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		for index, value := range messages {
+			message, _ := value.(map[string]any)
+			if message["role"] == "developer" {
+				t.Errorf("developer role leaked to Chat upstream: %s", body)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+			if index == 0 && message["role"] != "system" {
+				t.Errorf("instruction was not converted to system: %s", body)
+				w.WriteHeader(http.StatusBadRequest)
+				return
+			}
+		}
+		w.Header().Set("content-type", "application/json")
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer upstream.Close()
+
+	c := testConfig(upstream.URL, ir.OpenAIChat)
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(20), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	body := `{"model":"alias","input":[{"type":"message","role":"developer","content":[{"type":"input_text","text":"Follow the coding policy."}]},{"type":"message","role":"user","content":[{"type":"input_text","text":"Hello"}]}]}`
+	response, err := http.Post(server.URL+"/v1/responses", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer response.Body.Close()
+	raw, _ := io.ReadAll(response.Body)
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("status %d: %s", response.StatusCode, raw)
+	}
+}
+
 func TestGatewayManagedCredentialPolicyUsageAndRevocation(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("content-type", "application/json")
