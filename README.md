@@ -81,25 +81,6 @@ air client-state restore --backup Restore a verified backup while AI Router is s
 air --help     Show all commands
 ```
 
-## Access keys
-
-Open **Access keys** in the Web console to generate a separate gateway key for each application, device, SDK, or automation job. A key can be limited by model, protocol, source CIDR, RPM, burst, concurrency, daily requests, daily tokens, and maximum output tokens. The complete key is displayed once in the management UI.
-
-Locally generated keys are encrypted at rest and can be selected by name from **Applications**. AI Router decrypts the selected value only in the backend while previewing, writing, or verifying Codex/ChatGPT App, Claude Code, Claude App, and MiMo Code configuration; the complete value is not returned to the browser. Existing `auth.keys` remain valid and can be migrated without changing their value, but migrated digest-only keys cannot be selected for later application writes.
-
-Managed authentication is enabled in configuration with:
-
-```yaml
-auth:
-  enabled: true
-  managed_store: true
-  allow_query_key: false
-```
-
-The local state is stored in `gateway-state.db`; its HMAC key is stored separately in `credential-master.key`. Back up and restore them only through `air client-state` or the Web console so the bundle is checksummed and verified as a unit.
-
-Server deployments can supply the current key through `AIROUTE_CREDENTIAL_MASTER_KEY` and previous generations through the JSON object `AIROUTE_CREDENTIAL_PREVIOUS_KEYS`. AI Router refuses startup or backup when an active credential requires a missing generation.
-
 ## License
 
 AI Router is licensed under the [MIT License](LICENSE).
