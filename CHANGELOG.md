@@ -4,6 +4,17 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.3.3] - 2026-08-10
+
+### Bug Fixes
+
+- Stop starting the Pi CLI during passive application-page detection. This prevents Windows `pi.cmd` wrappers from repeatedly opening command windows and timing out; Pi is now detected by its PATH entry only.
+- Refresh transitive frontend locks for `nanoid` and `postcss` to resolve high-severity npm audit findings.
+
+### Documentation
+
+- Remove Pi Coding Agent setup details from the English and Chinese README files.
+
 ## [0.3.2] - 2026-08-10
 
 ### New Features
@@ -239,7 +250,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.3.2...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.3.3...HEAD
+[0.3.3]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.3
 [0.3.2]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.2
 [0.3.1]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.1
 [0.3.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.0

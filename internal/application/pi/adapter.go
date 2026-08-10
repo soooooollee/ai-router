@@ -45,11 +45,10 @@ type DesiredConfig struct {
 // AIROUTE_PI_AGENT_DIR by operators. WriteFile is injectable so failed second
 // writes can be tested without making filesystem permissions unreliable.
 type Adapter struct {
-	AgentDir       string
-	HTTPClient     *http.Client
-	LookPath       func(string) (string, error)
-	CommandTimeout time.Duration
-	WriteFile      func(string, []byte) error
+	AgentDir   string
+	HTTPClient *http.Client
+	LookPath   func(string) (string, error)
+	WriteFile  func(string, []byte) error
 }
 
 type fileSnapshot struct {
@@ -84,9 +83,8 @@ type wireConfig struct {
 
 func New() *Adapter {
 	return &Adapter{
-		HTTPClient:     &http.Client{Timeout: 60 * time.Second},
-		LookPath:       exec.LookPath,
-		CommandTimeout: 3 * time.Second,
+		HTTPClient: &http.Client{Timeout: 60 * time.Second},
+		LookPath:   exec.LookPath,
 	}
 }
 
@@ -145,26 +143,16 @@ func (a *Adapter) executable() (string, error) {
 	return lookPath("pi")
 }
 
-func (a *Adapter) Detect(ctx context.Context) (application.Detection, error) {
+func (a *Adapter) Detect(_ context.Context) (application.Detection, error) {
 	path, err := a.executable()
 	if err != nil {
 		return application.Detection{Message: "未检测到 Pi Coding Agent 命令"}, nil
 	}
-	timeout := a.CommandTimeout
-	if timeout <= 0 {
-		timeout = 3 * time.Second
-	}
-	checkCtx, cancel := context.WithTimeout(ctx, timeout)
-	defer cancel()
-	output, commandErr := exec.CommandContext(checkCtx, path, "--version").CombinedOutput()
-	version := strings.TrimSpace(string(output))
-	if checkCtx.Err() == context.DeadlineExceeded {
-		return application.Detection{Installed: true, Executable: path, Version: version, Message: "Pi Coding Agent 命令响应超时"}, nil
-	}
-	if commandErr != nil {
-		return application.Detection{Installed: true, Executable: path, Version: version, Message: "已检测到 Pi Coding Agent，但版本读取失败"}, nil
-	}
-	return application.Detection{Installed: true, Executable: path, Version: version, Message: "Pi Coding Agent 已安装"}, nil
+	// Pi is normally discovered as a Node.js-generated .cmd shim on Windows.
+	// Application-page reads and preview refreshes are passive operations, so
+	// never launch the interactive CLI merely to display its version: each
+	// probe would create a cmd.exe window and can wait for the agent startup.
+	return application.Detection{Installed: true, Executable: path, Message: "Pi Coding Agent 已检测到"}, nil
 }
 
 func (a *Adapter) write(path string, content []byte) error {

@@ -81,34 +81,6 @@ air client-state restore --backup Restore a verified backup while AI Router is s
 air --help     Show all commands
 ```
 
-## Pi Coding Agent
-
-The **Applications** page can configure Pi Coding Agent as an AI Router custom
-provider. It writes only the `airoute` provider in Pi's global
-`~/.pi/agent/models.json` and the matching `defaultProvider` / `defaultModel`
-in `~/.pi/agent/settings.json`; other providers and settings are preserved.
-
-Choose one request protocol when configuring Pi. The resulting provider uses
-the corresponding Pi API type and AI Router endpoint:
-
-| Pi request protocol | Pi API type | AI Router endpoint |
-| --- | --- | --- |
-| OpenAI Chat | `openai-completions` | `/v1/chat/completions` |
-| OpenAI Responses | `openai-responses` | `/v1/responses` |
-| Anthropic Messages | `anthropic-messages` | `/v1/messages` |
-| Gemini Generate Content | `google-generative-ai` | `/v1beta/models/{model}:streamGenerateContent` |
-
-The page previews, backs up, restores, and cleans up both files as one unit.
-It uses an AI Router client key, never an upstream provider token or Pi OAuth.
-Project-local `.pi/settings.json` can override these global defaults. Set
-`PI_CODING_AGENT_DIR` (or the AI Router-specific `AIROUTE_PI_AGENT_DIR`) to
-use another Pi agent directory.
-
-Pi accepts JSONC in `models.json`. AI Router reads that file safely but refuses
-automatic rewrites when comments or trailing commas are present, so it cannot
-silently strip hand-written formatting. Use the editable preview to submit a
-standard JSON two-file bundle if you intentionally want to replace it.
-
 ## License
 
 AI Router is licensed under the [MIT License](LICENSE).

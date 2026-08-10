@@ -81,28 +81,6 @@ air client-state restore --backup 在 AI Router 停止时恢复已校验的备�
 air --help     查看全部命令
 ```
 
-## Pi Coding Agent
-
-在“应用配置”页可以把 Pi Coding Agent 配置为 AI Router 的自定义 Provider。AI Router 只会更新全局
-`~/.pi/agent/models.json` 中的 `airoute` Provider，以及 `~/.pi/agent/settings.json` 中对应的
-`defaultProvider` / `defaultModel`；其他 Provider 和设置都会保留。
-
-配置时选择一种请求协议，Pi Provider 会写入对应的 API 类型和 AI Router 入口：
-
-| Pi 请求协议 | Pi API 类型 | AI Router 入口 |
-| --- | --- | --- |
-| OpenAI Chat | `openai-completions` | `/v1/chat/completions` |
-| OpenAI Responses | `openai-responses` | `/v1/responses` |
-| Anthropic Messages | `anthropic-messages` | `/v1/messages` |
-| Gemini Generate Content | `google-generative-ai` | `/v1beta/models/{model}:streamGenerateContent` |
-
-页面会把两个文件作为一个整体预览、备份、恢复与清理。它使用 AI Router 的客户端访问密钥，不会写入上游
-Provider token，也不使用 Pi OAuth。项目目录中的 `.pi/settings.json` 可以覆盖这些全局默认值；可通过
-`PI_CODING_AGENT_DIR`（或 AI Router 专用的 `AIROUTE_PI_AGENT_DIR`）改用其他 Pi agent 目录。
-
-Pi 的 `models.json` 支持 JSONC。AI Router 可以安全读取其中的注释和尾逗号，但会拒绝自动重写，避免静默移除
-手写格式。若确实要替换该文件，请在可编辑预览中提交包含两个文件的标准 JSON 配置。
-
 ## License
 
 AI Router 使用 [MIT License](LICENSE)。

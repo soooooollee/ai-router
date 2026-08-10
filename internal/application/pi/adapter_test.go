@@ -313,7 +313,7 @@ func TestVerifyUsesEachPiProtocolWithoutExposingSecret(t *testing.T) {
 	}
 }
 
-func TestAgentDirectoryEnvironmentAndDetection(t *testing.T) {
+func TestAgentDirectoryEnvironmentAndPassiveDetection(t *testing.T) {
 	t.Setenv("AIROUTE_PI_AGENT_DIR", "")
 	configured := t.TempDir()
 	t.Setenv("PI_CODING_AGENT_DIR", configured)
@@ -328,24 +328,16 @@ func TestAgentDirectoryEnvironmentAndDetection(t *testing.T) {
 		t.Fatalf("missing detection = %#v, %v", missing, err)
 	}
 
-	script := filepath.Join(t.TempDir(), "pi-version")
-	if err = os.WriteFile(script, []byte("#!/bin/sh\necho pi 0.84.1\n"), 0700); err != nil {
+	script := filepath.Join(t.TempDir(), "pi")
+	if err = os.WriteFile(script, []byte("#!/bin/sh\ntouch \"$0.invoked\"\n"), 0700); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("AIROUTE_PI_EXECUTABLE", script)
 	detected, err := a.Detect(context.Background())
-	if err != nil || !detected.Installed || detected.Version != "pi 0.84.1" {
+	if err != nil || !detected.Installed || detected.Executable != script || detected.Version != "" || detected.Message != "Pi Coding Agent 已检测到" {
 		t.Fatalf("success detection = %#v, %v", detected, err)
 	}
-
-	timeoutScript := filepath.Join(t.TempDir(), "pi-timeout")
-	if err = os.WriteFile(timeoutScript, []byte("#!/bin/sh\nsleep 1\n"), 0700); err != nil {
-		t.Fatal(err)
-	}
-	t.Setenv("AIROUTE_PI_EXECUTABLE", timeoutScript)
-	a.CommandTimeout = 10 * time.Millisecond
-	timedOut, err := a.Detect(context.Background())
-	if err != nil || !timedOut.Installed || !strings.Contains(timedOut.Message, "超时") {
-		t.Fatalf("timeout detection = %#v, %v", timedOut, err)
+	if _, statErr := os.Stat(script + ".invoked"); !os.IsNotExist(statErr) {
+		t.Fatalf("passive detection must not start Pi: stat error = %v", statErr)
 	}
 }
