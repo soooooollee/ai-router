@@ -27,6 +27,7 @@ import (
 	"github.com/zbss/airoute/internal/application/claudecode"
 	"github.com/zbss/airoute/internal/application/codex"
 	"github.com/zbss/airoute/internal/application/mimocode"
+	"github.com/zbss/airoute/internal/application/pi"
 	"github.com/zbss/airoute/internal/auth"
 	"github.com/zbss/airoute/internal/clientauth"
 	"github.com/zbss/airoute/internal/clientstore"
@@ -89,7 +90,7 @@ func New(c *config.Store, r *protocol.Registry, l *observe.Store, m *observe.Met
 	if len(configPaths) > 0 {
 		codexAdapter.RouterConfigPath = configPaths[0]
 	}
-	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, ReleaseURL: releaseURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codexAdapter, mimocode.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}, probeCache: map[string]providerProbeCacheEntry{}, probeInFlight: map[string]*providerProbeCall{}}
+	return &Server{Config: c, Registry: r, Logs: l, Metrics: m, Started: time.Now(), Version: version, GatewayURL: gatewayURL, ReleaseURL: releaseURL, Client: &http.Client{Timeout: 30 * time.Second}, RestrictedClient: &http.Client{Transport: restrictedTransport, Timeout: 30 * time.Second}, Applications: application.NewRegistry(claudeapp.New(), claudecode.New(), codexAdapter, mimocode.New(), pi.New()), failures: map[string][]time.Time{}, health: map[string]map[string]any{}, probeCache: map[string]providerProbeCacheEntry{}, probeInFlight: map[string]*providerProbeCall{}}
 }
 func (s *Server) CloseIdleConnections() {
 	s.Client.CloseIdleConnections()

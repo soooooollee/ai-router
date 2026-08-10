@@ -99,11 +99,12 @@ export function applicationRouteOptionLabel(option: ApplicationRouteOption) {
   return `${option.alias} → ${protocol}`;
 }
 
-export function applicationProtocol(applicationID: string) {
+export function applicationProtocol(applicationID: string, wireProtocol?: string) {
   if (applicationID === "codex") {
     return "openai-responses";
   }
   if (applicationID === "mimo-code") return "openai-chat";
+  if (applicationID === "pi") return wireProtocol || "openai-chat";
   if (applicationID === "claude-code" || applicationID === "claude-app") {
     return "anthropic-messages";
   }
@@ -114,8 +115,9 @@ export function applicationRouteOptions(
   routes: RouteConfig[],
   applicationID: string,
   providers: Provider[] = [],
+  wireProtocol?: string,
 ) {
-  const expectedProtocol = applicationProtocol(applicationID);
+  const expectedProtocol = applicationProtocol(applicationID, wireProtocol);
   const providerByID = new Map(providers.map((provider) => [provider.id, provider]));
   const options = new Map<string, ApplicationRouteOption>();
   for (const route of routes) {

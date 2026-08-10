@@ -110,6 +110,13 @@ describe("presentation helpers", () => {
       { alias: "mimo", protocol: "anthropic-messages" },
       { alias: "generic" },
     ]);
+    expect(applicationRouteOptions(routes, "pi", [], "openai-responses")).toEqual([
+      { alias: "mimo", protocol: "openai-responses" },
+      { alias: "generic" },
+    ]);
+    expect(applicationRouteOptions(routes, "pi", [], "gemini-generate-content")).toEqual([
+      { alias: "generic" },
+    ]);
   });
 
   it("shows the upstream model service in application model options", () => {

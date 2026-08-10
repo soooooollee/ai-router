@@ -56,6 +56,14 @@ routes:
     targets:
       - provider: mock
         model: mock-model
+  - id: mimo-gemini
+    priority: 100
+    match:
+      model: mimo-v2.5
+      protocol: gemini-generate-content
+    targets:
+      - provider: mock
+        model: mock-model
 
 default_route:
   targets:

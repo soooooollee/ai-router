@@ -26,6 +26,7 @@ const applicationOrder = [
   "claude-app",
   "codex",
   "mimo-code",
+  "pi",
 ];
 
 function previewText(value: ApplicationPreview["content"] | undefined) {
@@ -43,15 +44,6 @@ export function ApplicationsPage({
 	const [apps, setApps] = useState<ApplicationListItem[]>([]);
 	const [clientKeys, setClientKeys] = useState<ClientListResponse | null>(null);
 	const [selectedID, setSelectedID] = useState("claude-code");
-	const routeOptions = useMemo(
-		() => applicationRouteOptions(config?.routes || [], selectedID, config?.providers || []),
-		[config?.routes, config?.providers, selectedID],
-	);
-	const aliases = useMemo(
-		() => routeOptions.map((option) => option.alias),
-		[routeOptions],
-	);
-  const fallback = aliases[0] || "";
   const webRedaction = Boolean(config?.logging?.web_redaction);
   const gateway = status?.gateway_url || "http://127.0.0.1:12666";
   const [appState, setAppState] = useState<ApplicationState | null>(null);
@@ -76,12 +68,27 @@ export function ApplicationsPage({
     base_url: gateway,
 	api_key: "",
     credential_id: "",
-    model: fallback,
+    model: "",
+		wire_protocol: "openai-chat",
     integration_mode: "compatibility" as "direct" | "passthrough" | "compatibility",
-    opus_model: fallback,
-    sonnet_model: fallback,
-    haiku_model: fallback,
+    opus_model: "",
+    sonnet_model: "",
+    haiku_model: "",
   });
+	const routeOptions = useMemo(
+		() => applicationRouteOptions(
+			config?.routes || [],
+			selectedID,
+			config?.providers || [],
+			selectedID === "pi" ? form.wire_protocol : undefined,
+		),
+		[config?.routes, config?.providers, form.wire_protocol, selectedID],
+	);
+	const aliases = useMemo(
+		() => routeOptions.map((option) => option.alias),
+		[routeOptions],
+	);
+  const fallback = aliases[0] || "";
   const selectedRouteOption = routeOptions.find(
     (option) => option.alias === form.model,
   );
@@ -103,7 +110,10 @@ export function ApplicationsPage({
       return ({
 		...form,
 		credential_id: form.credential_id || firstCredentialID,
-      models: aliases,
+		// Pi's configured model is its entire custom-model directory. Unlike
+		// role-based clients, exposing every compatible route here makes Pi's
+		// /model selector diverge from the model the user explicitly chose.
+		models: selectedID === "pi" && form.model ? [form.model] : aliases,
       ...(selectedID === "codex" && selectedRouteOption
         ? {
             provider_id: selectedRouteOption.provider_id,
@@ -132,6 +142,7 @@ export function ApplicationsPage({
 		"claude-app",
 		"codex",
 		"mimo-code",
+		"pi",
 	].includes(selectedID);
 	const isClaudeApplication =
 		selectedID === "claude-code" || selectedID === "claude-app";
@@ -176,10 +187,17 @@ export function ApplicationsPage({
 				&& typeof managed.airoute_client_credential_prefix === "string" && managed.airoute_client_credential_prefix.startsWith("sk-")
 				? managed.airoute_client_credential_id
 				: "";
+		const storedWireProtocol = selectedID === "pi" && typeof managed.wire_protocol === "string"
+			? managed.wire_protocol
+			: "";
+		const optionsForState = storedWireProtocol
+			? applicationRouteOptions(config?.routes || [], selectedID, config?.providers || [], storedWireProtocol)
+			: routeOptions;
+		const fallbackForState = optionsForState[0]?.alias || "";
       const selected = (candidate: unknown) =>
-        typeof candidate === "string" && aliases.includes(candidate)
+        typeof candidate === "string" && optionsForState.some((option) => option.alias === candidate)
           ? candidate
-          : fallback;
+          : fallbackForState;
       const isDesktop = selectedID === "claude-app";
       const read = (desktopKey: string, codeKey: string) =>
         isClaudeApplication
@@ -188,13 +206,13 @@ export function ApplicationsPage({
       const managedModel = read("model", "ANTHROPIC_MODEL");
       const selectedModel =
         typeof managedModel === "string"
-          ? routeOptions.find(
+          ? optionsForState.find(
               (option) =>
                 option.alias === managedModel ||
                 (managed.integration_mode === "direct" &&
                   option.provider_model === managedModel),
-            )?.alias || fallback
-          : fallback;
+            )?.alias || fallbackForState
+          : fallbackForState;
       setForm((current) => ({
         base_url: applicationGatewayURL(
           read("base_url", "ANTHROPIC_BASE_URL"),
@@ -203,6 +221,7 @@ export function ApplicationsPage({
 				credential_id: credentialSelectionTouchedRef.current ? current.credential_id : currentCredentialID || firstCredentialID,
 				api_key: "",
         model: selectedModel,
+				wire_protocol: storedWireProtocol || current.wire_protocol,
         integration_mode:
           selectedID === "codex"
             ? (routeOptions.find((option) => option.alias === selectedModel)?.integration_mode ||
@@ -214,7 +233,7 @@ export function ApplicationsPage({
         haiku_model: selected(read("haiku_model", "ANTHROPIC_DEFAULT_HAIKU_MODEL")),
       }));
     }
-  }, [aliases, fallback, firstCredentialID, gateway, isClaudeApplication, routeOptions, selectedID, supportsConfigForm]);
+  }, [aliases, config?.providers, config?.routes, firstCredentialID, gateway, isClaudeApplication, routeOptions, selectedID, supportsConfigForm]);
 
   useEffect(() => {
     loadApplications().catch((error) => setMessage((error as Error).message));
@@ -534,9 +553,11 @@ export function ApplicationsPage({
 							? "Claude App 通过本机第三方网关连接 AI Router"
 							: selectedID === "codex"
 								? "Codex CLI 与 ChatGPT App 通过 Responses 协议连接 AI Router"
-								: selectedID === "mimo-code"
-									? "MiMo Code 通过 OpenAI 兼容协议连接 AI Router"
-									: "Claude Code 连接到本机 AI Router"}
+							: selectedID === "mimo-code"
+								? "MiMo Code 通过 OpenAI 兼容协议连接 AI Router"
+								: selectedID === "pi"
+									? "Pi Coding Agent 使用所选请求协议连接 AI Router"
+								: "Claude Code 连接到本机 AI Router"}
 					</span>
                     </div>
                     <span>01</span>
@@ -582,6 +603,34 @@ export function ApplicationsPage({
 						</div>
 						<button type="button" onClick={() => { location.hash = "clients"; }}>生成密钥</button>
 					</div>}
+					{selectedID === "pi" && <label className="full">
+						请求协议
+						<select
+							aria-label="请求协议"
+							value={form.wire_protocol}
+							onChange={(event) => {
+								const wireProtocol = event.target.value;
+								const nextOptions = applicationRouteOptions(
+									config?.routes || [],
+									"pi",
+									config?.providers || [],
+									wireProtocol,
+								);
+								setForm({
+									...form,
+									wire_protocol: wireProtocol,
+									model: nextOptions.some((option) => option.alias === form.model)
+										? form.model
+										: nextOptions[0]?.alias || "",
+								});
+							}}
+						>
+							<option value="openai-chat">OpenAI Chat</option>
+							<option value="openai-responses">OpenAI Responses</option>
+							<option value="anthropic-messages">Anthropic Messages</option>
+							<option value="gemini-generate-content">Gemini Generate Content</option>
+						</select>
+					</label>}
                       </>
                     )}
                   </div>
@@ -591,7 +640,7 @@ export function ApplicationsPage({
                   <div className="application-section-title">
                     <div>
 					  <b>{isClaudeApplication ? "模型角色映射" : "模型设置"}</b>
-                      <span>可选模型来源于已经保存的路由</span>
+					  <span>{selectedID === "pi" ? "仅显示与所选请求协议兼容的路由（通用路由始终可用）" : "可选模型来源于已经保存的路由"}</span>
                     </div>
                     <span>02</span>
                   </div>
@@ -613,7 +662,7 @@ export function ApplicationsPage({
 						</>
 					)}
                   </div>
-                  {usesCodexCompatibilityFallback && (
+				  {usesCodexCompatibilityFallback && (
                     <div className="application-compatibility-warning" role="alert">
                       <TriangleAlert size={17} />
                       <div>
@@ -625,7 +674,16 @@ export function ApplicationsPage({
                         </span>
                       </div>
                     </div>
-                  )}
+				  )}
+				  {selectedID === "pi" && (
+					<div className="application-compatibility-warning" role="alert">
+						<TriangleAlert size={17} />
+						<div>
+							<b>Pi 项目配置可能覆盖全局默认值</b>
+							<span>本页写入 ~/.pi/agent 的全局配置；项目目录中的 .pi/settings.json 可以覆盖默认 Provider 和模型。</span>
+						</div>
+					</div>
+				  )}
                 </section>
 
                 <div className="application-save-bar">
@@ -638,6 +696,8 @@ export function ApplicationsPage({
 								? "Codex CLI、ChatGPT App 与 IDE 扩展共享 ~/.codex/config.toml；写入后请重启正在使用的客户端。"
 								: selectedID === "mimo-code"
 									? "仅更新 MiMo Code 的 AI Router provider，保留其他 Provider 和设置。"
+									: selectedID === "pi"
+										? "同时更新 Pi 的 models.json 与 settings.json；仅管理 AI Router provider，项目级 .pi/settings.json 可覆盖全局默认值。"
 									: "写入前自动备份，不覆盖 Hooks、插件和权限配置。"}
 					</span>
                   </div>

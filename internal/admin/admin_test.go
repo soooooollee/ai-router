@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
 	"slices"
@@ -57,7 +58,7 @@ func TestStaticAssetsUseURLPathsAndDoNotFallbackToHTML(t *testing.T) {
 	}
 
 	recorder := httptest.NewRecorder()
-	request := httptest.NewRequest(http.MethodGet, "/assets/"+assetName, nil)
+	request := httptest.NewRequest(http.MethodGet, "/assets/"+url.PathEscape(assetName), nil)
 	(&Server{}).static(recorder, request)
 	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Header().Get("content-type"), "javascript") || strings.Contains(strings.ToLower(recorder.Body.String()), "<!doctype html") {
 		t.Fatalf("JavaScript asset response is invalid: status=%d type=%q body=%q", recorder.Code, recorder.Header().Get("content-type"), recorder.Body.String()[:min(80, recorder.Body.Len())])
@@ -158,7 +159,7 @@ logging:
 		t.Fatal(err)
 	}
 	resp.Body.Close()
-	if statusBody["models"] != float64(1) || statusBody["applications_total"] != float64(4) || statusBody["logs"] != float64(0) || statusBody["logging_persist"] != false {
+	if statusBody["models"] != float64(1) || statusBody["applications_total"] != float64(5) || statusBody["logs"] != float64(0) || statusBody["logging_persist"] != false {
 		t.Fatalf("status configuration summary is incomplete: %#v", statusBody)
 	}
 	if err := os.Chmod(path, 0644); err != nil {
@@ -871,7 +872,7 @@ func TestApplicationAPIClaudeCodeLifecycle(t *testing.T) {
 	}
 
 	resp, body := request(http.MethodGet, "/api/apps?detect=false", "")
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) || bytes.Contains(body, []byte(`"id":"chatgpt-app"`)) || !bytes.Contains(body, []byte(`"id":"codex"`)) || !bytes.Contains(body, []byte(`"name":"Codex CLI / ChatGPT App"`)) || !bytes.Contains(body, []byte(`"id":"mimo-code"`)) {
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(body, []byte(`"id":"claude-code"`)) || !bytes.Contains(body, []byte(`"id":"claude-app"`)) || bytes.Contains(body, []byte(`"id":"chatgpt-app"`)) || !bytes.Contains(body, []byte(`"id":"codex"`)) || !bytes.Contains(body, []byte(`"name":"Codex CLI / ChatGPT App"`)) || !bytes.Contains(body, []byte(`"id":"mimo-code"`)) || !bytes.Contains(body, []byte(`"id":"pi"`)) || !bytes.Contains(body, []byte(`"name":"Pi Coding Agent"`)) {
 		t.Fatalf("application list failed (%d): %s", resp.StatusCode, body)
 	}
 	resp, body = request(http.MethodGet, "/api/apps/chatgpt-app", "")
@@ -1020,6 +1021,60 @@ func TestApplicationWebRedactionFollowsSettingAndPreservesKey(t *testing.T) {
 	resp, body = request(http.MethodPost, "/api/apps/codex/preview", codexPayload)
 	if resp.StatusCode != http.StatusOK || bytes.Contains(body, []byte("real-codex-key")) || !bytes.Contains(body, []byte(webRedactionMask)) || !bytes.Contains(body, []byte("experimental_bearer_token")) {
 		t.Fatalf("Codex TOML preview did not follow web redaction (%d): %s", resp.StatusCode, body)
+	}
+}
+
+func TestPiApplicationRedactsNestedProviderKey(t *testing.T) {
+	piDir := t.TempDir()
+	t.Setenv("AIROUTE_PI_AGENT_DIR", piDir)
+	modelsPath := filepath.Join(piDir, "models.json")
+	settingsPath := filepath.Join(piDir, "settings.json")
+	if err := os.MkdirAll(piDir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(modelsPath, []byte(`{"providers":{"airoute":{"baseUrl":"http://127.0.0.1:12666/v1","api":"openai-completions","apiKey":"pi-local-secret","models":[{"id":"route"}]}}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(settingsPath, []byte(`{"defaultProvider":"airoute","defaultModel":"route"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	c := &config.Config{
+		Admin:   config.Admin{Enabled: true, Token: "test-admin-token-1234567890"},
+		Logging: config.Logging{WebRedaction: true},
+	}
+	ts := httptest.NewServer(New(config.NewStore(c), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "http://127.0.0.1:12666"))
+	defer ts.Close()
+	request := func(method, endpoint, payload string) []byte {
+		t.Helper()
+		req, err := http.NewRequest(method, ts.URL+endpoint, strings.NewReader(payload))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("content-type", "application/json")
+		req.Header.Set("authorization", "Bearer test-admin-token-1234567890")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s failed (%d): %s", method, endpoint, resp.StatusCode, body)
+		}
+		return body
+	}
+
+	state := request(http.MethodGet, "/api/apps/pi", "")
+	if bytes.Contains(state, []byte("pi-local-secret")) || !bytes.Contains(state, []byte(webRedactionMask)) {
+		t.Fatalf("Pi application state leaked its key: %s", state)
+	}
+	payload := `{"base_url":"http://127.0.0.1:12666","api_key":"pi-preview-secret","model":"route","models":["route"],"wire_protocol":"openai-chat"}`
+	preview := request(http.MethodPost, "/api/apps/pi/preview", payload)
+	if bytes.Contains(preview, []byte("pi-preview-secret")) || !bytes.Contains(preview, []byte(webRedactionMask)) {
+		t.Fatalf("Pi application preview leaked its key: %s", preview)
 	}
 }
 

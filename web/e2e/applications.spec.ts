@@ -35,6 +35,7 @@ test("application manifest, preview, apply and gateway verification", async ({
     "Claude App",
 	"Codex CLI / ChatGPT App",
     "MiMo Code",
+    "Pi Coding Agent",
   ]);
   await expect(page.getByText("/tmp/airoute-claude-e2e.json")).toBeVisible();
   await expect(page.getByRole("button", { name: "刷新预览" })).toHaveCount(0);
@@ -211,4 +212,43 @@ test("application manifest, preview, apply and gateway verification", async ({
   await expect(page.getByRole("heading", { name: "清理旧配置？" })).toBeVisible();
   await page.getByRole("button", { name: "备份并清理" }).click();
   await expect(page.getByText(/已清理旧配置/)).toBeVisible();
+
+  await page.getByRole("tab", { name: "Pi Coding Agent" }).click();
+  await expect(page.getByRole("heading", { name: "Pi Coding Agent" })).toBeVisible();
+  await expect(page.getByText("/tmp/airoute-pi-e2e/models.json")).toBeVisible();
+  await expect(page.getByLabel("请求协议")).toHaveValue("openai-chat");
+  await expect(page.getByText(/项目配置可能覆盖全局默认值/)).toBeVisible();
+  await expectModelOptions(page, [
+    "不设置",
+    "Mock Provider → mock-model → 所有兼容协议",
+    "Mock Provider → mock-model → OpenAI Chat",
+  ]);
+  await page.getByLabel("请求协议").selectOption("openai-responses");
+  await expectModelOptions(page, [
+    "不设置",
+    "Mock Provider → mock-model → 所有兼容协议",
+    "Mock Provider → mock-model → OpenAI Responses",
+  ]);
+  await page.getByLabel("请求协议").selectOption("anthropic-messages");
+  await expectModelOptions(page, [
+    "不设置",
+    "Mock Provider → mock-model → 所有兼容协议",
+    "Mock Provider → mock-model → Anthropic Messages",
+  ]);
+  await page.getByLabel("请求协议").selectOption("gemini-generate-content");
+  await expectModelOptions(page, [
+    "不设置",
+    "Mock Provider → mock-model → 所有兼容协议",
+    "Mock Provider → mock-model → Gemini",
+  ]);
+  await page
+    .getByRole("button", { name: "备份并写入", exact: true })
+    .click();
+  await expect(page.getByText(/已写入 \/tmp\/airoute-pi-e2e\/models\.json/)).toBeVisible();
+  await expect(page.getByLabel("编辑合并后配置")).toHaveValue(/"models.json"/);
+  await expect(page.getByLabel("编辑合并后配置")).toHaveValue(/"settings.json"/);
+  const piBundle = JSON.parse(await page.getByLabel("编辑合并后配置").inputValue());
+  expect(piBundle["models.json"].providers.airoute.models).toEqual([
+    { id: "fast" },
+  ]);
 });

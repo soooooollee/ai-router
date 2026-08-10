@@ -4,6 +4,17 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.3.2] - 2026-08-10
+
+### New Features
+
+- Add a Pi Coding Agent application adapter that manages the global custom-provider catalog and defaults as one recoverable `models.json` / `settings.json` bundle. The Applications page supports OpenAI Chat, OpenAI Responses, Anthropic Messages, and Gemini Generate Content route selection.
+
+### Security and Compatibility
+
+- Preserve non-AI Router Pi providers and settings, use managed AI Router client keys instead of upstream provider tokens, and redact nested Pi `apiKey` values in the management API.
+- Read Pi JSONC safely and refuse automatic rewrites when comments or trailing commas would otherwise be lost; project-local `.pi/settings.json` is never modified.
+
 ## [0.3.1] - 2026-07-23
 
 ### New Features
@@ -228,7 +239,8 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Split route-level React bundles, removed inaccessible legacy pages and historical UI override CSS, and added five independent Playwright workflows.
 - Unified main and application configuration writes on the same `0600` atomic-file and unique-backup implementation.
 
-[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.3.1...HEAD
+[Unreleased]: https://github.com/soooooollee/ai-router/compare/v0.3.2...HEAD
+[0.3.2]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.2
 [0.3.1]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.1
 [0.3.0]: https://github.com/soooooollee/ai-router/releases/tag/v0.3.0
 [0.2.6]: https://github.com/soooooollee/ai-router/releases/tag/v0.2.6
