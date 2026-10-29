@@ -17,6 +17,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 ### Maintenance
 
 - Update frontend build and test dependencies to patched versions for release security checks.
+- Build release binaries and containers with Go 1.27.3, and run vulnerability checks with the same toolchain.
 
 ### Distribution
 

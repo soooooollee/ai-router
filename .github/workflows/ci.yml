@@ -11,7 +11,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
-        with: { go-version: "1.24.x", cache: true }
+        with: { go-version: "1.27.3", cache: true }
       - uses: actions/setup-node@v6
         with:
           node-version: "22"
@@ -34,7 +34,7 @@ jobs:
       - run: go build ./cmd/airoute
       - run: ./scripts/test-lifecycle.sh
       - uses: golang/govulncheck-action@v1
-        with: { go-version-input: "1.25.x", go-package: ./..., cache: false }
+        with: { go-version-input: "1.27.3", go-package: ./..., cache: false, repo-checkout: false }
       - run: go run github.com/google/go-licenses/v2@v2.0.1 check ./...
       - run: npm audit --audit-level=high
         working-directory: web
@@ -59,7 +59,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
-        with: { go-version: "1.24.x", cache: true }
+        with: { go-version: "1.27.3", cache: true }
       - run: go build -trimpath -o air-smoke${{ runner.os == 'Windows' && '.exe' || '' }} ./cmd/airoute
       - run: go run ./cmd/airoute version
   docker:
