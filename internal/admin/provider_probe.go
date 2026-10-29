@@ -43,7 +43,7 @@ const (
 	providerDetectionTimeout                    = 45 * time.Second
 	providerProbeSuccessTTL                     = 10 * time.Minute
 	providerProbeFailureTTL                     = 30 * time.Second
-	providerDetectorVersion                     = 7
+	providerDetectorVersion                     = 8
 )
 
 type capabilityState string
@@ -234,6 +234,7 @@ func canceledProviderDetection(baseURL string, models []string, started time.Tim
 }
 
 func (s *Server) resolveProviderCapabilities(ctx context.Context, baseURL, apiKey string, models []string, allowPrivateURL bool, emit providerProgressEmitter) providerDetectionReport {
+	ctx = providerprofile.WithProbeSession(ctx)
 	started := time.Now()
 	profile := detectProviderProfile(baseURL, models)
 	emitProviderProgress(emit, "fingerprint", "completed", "模型服务特征识别完成", "")
@@ -330,14 +331,21 @@ func (s *Server) resolveProviderCapabilities(ctx context.Context, baseURL, apiKe
 			endToEnd := notTestedCheck("requires tools support and a non-deterministic streaming failure")
 			if tools.State == capabilitySupported && streaming.State != capabilityUnsupported {
 				probeProvider := p
-				if candidate == ir.OpenAIChat && combined.State != capabilitySupported {
+				preserveReasoning := providerprofile.IsOpenCodeGo(baseURL) && combined.State != capabilityUnsupported
+				if preserveReasoning {
+					probeProvider.ReasoningHistory = "preserve"
+				}
+				if candidate == ir.OpenAIChat && combined.State != capabilitySupported && !preserveReasoning {
 					probeProvider.CompatibilityMode = "codex-chat"
 				}
-				if combined.State != capabilitySupported {
+				if combined.State != capabilitySupported && !preserveReasoning {
 					probeProvider.ReasoningWithTools = "disabled"
 				}
 				emitProviderProgress(emit, "codex", "running", "正在验证 Codex 与 apply_patch 完整链路", candidate)
 				endToEnd = s.verifyCodexEndToEnd(ctx, probeProvider)
+				if preserveReasoning {
+					endToEnd.Evidence = append(endToEnd.Evidence, "reasoning_configuration_preserved")
+				}
 				emitProviderProgress(emit, "codex", string(endToEnd.State), "Codex 端到端验证完成", candidate)
 			}
 			report.CodexEndToEnd = &endToEnd
@@ -384,10 +392,17 @@ func (s *Server) resolveProviderCapabilities(ctx context.Context, baseURL, apiKe
 			endToEnd := notTestedCheck("requires tools support and a non-deterministic streaming failure")
 			if tools.State == capabilitySupported && streaming.State != capabilityUnsupported {
 				p.CompatibilityMode = "codex-responses"
-				if combined.State != capabilitySupported {
+				preserveReasoning := providerprofile.IsOpenCodeGo(baseURL) && combined.State != capabilityUnsupported
+				if preserveReasoning {
+					p.ReasoningHistory = "preserve"
+				}
+				if combined.State != capabilitySupported && !preserveReasoning {
 					p.ReasoningWithTools = "disabled"
 				}
 				endToEnd = s.verifyCodexEndToEnd(ctx, p)
+				if preserveReasoning {
+					endToEnd.Evidence = append(endToEnd.Evidence, "reasoning_configuration_preserved")
+				}
 			}
 			responses.CodexEndToEnd = &endToEnd
 			reports[ir.OpenAIResponses] = responses
@@ -589,6 +604,14 @@ func codexCompatibility(reports map[ir.Protocol]protocolCapabilityReport) codexC
 				RecommendedReasoningHistory:   "preserve",
 				RecommendedReasoningWithTools: "disabled",
 			}
+			if hasCapabilityEvidence(*report.CodexEndToEnd, "reasoning_configuration_preserved") {
+				candidate.Message = "Codex 经 AI Router 的流式工具调用与多轮续接已验证；保留上游推理设置"
+				candidate.RecommendedOmitFields = nil
+				candidate.RecommendedReasoningWithTools = "supported"
+				if protocolName == ir.OpenAIChat {
+					candidate.RecommendedCompatibilityMode = ""
+				}
+			}
 			best = preferCodexCompatibility(best, candidate)
 			continue
 		}
@@ -660,6 +683,11 @@ func codexCompatibility(reports map[ir.Protocol]protocolCapabilityReport) codexC
 					candidate.RecommendedReasoningWithTools = "disabled"
 					candidate.RecommendedOmitFields = []string{"reasoning_effort"}
 				}
+				if hasCapabilityEvidence(*report.CodexEndToEnd, "reasoning_configuration_preserved") {
+					candidate.RecommendedReasoningWithTools = "supported"
+					candidate.RecommendedOmitFields = nil
+					candidate.RecommendedCompatibilityMode = ""
+				}
 				if protocolName == ir.OpenAIResponses {
 					candidate.RecommendedCompatibilityMode = "codex-responses"
 					if candidate.RecommendedReasoningWithTools == "disabled" {
@@ -722,16 +750,43 @@ func codexCompatibility(reports map[ir.Protocol]protocolCapabilityReport) codexC
 		}
 	}
 	if sawUnavailable && !sawReachable {
-		return codexCompatibilityReport{Status: "unavailable", Message: "认证、限流、配额、网络或超时导致检测无法完成", Confidence: 1}
+		return codexCompatibilityReport{Status: "unavailable", Message: providerDetectionFailureMessage(reports), Confidence: 1}
 	}
 	if sawReachable {
 		return codexCompatibilityReport{Status: "incompatible", Message: "已验证的 OpenAI 协议无法同时满足 Codex 的流式输出和 function tools 基本要求", Verified: true, Confidence: 0.9}
 	}
 	return codexCompatibilityReport{
 		Status:     "unavailable",
-		Message:    "未检测到可访问的 OpenAI 协议端点",
+		Message:    providerDetectionFailureMessage(reports),
 		Confidence: 0.9,
 	}
+}
+
+// Include the upstream reason instead of equating every rejection with a missing endpoint.
+func providerDetectionFailureMessage(reports map[ir.Protocol]protocolCapabilityReport) string {
+	var details []string
+	for _, protocolName := range []ir.Protocol{ir.OpenAIChat, ir.OpenAIResponses, ir.Anthropic, ir.Gemini} {
+		report, exists := reports[protocolName]
+		if !exists || report.Basic.OK {
+			continue
+		}
+		check := report.Basic
+		reason := check.Error
+		if reason == "" {
+			reason = check.ErrorCode
+		}
+		if reason == "" {
+			reason = "请求未通过"
+		}
+		if check.Status > 0 {
+			reason = fmt.Sprintf("HTTP %d：%s", check.Status, reason)
+		}
+		details = append(details, string(protocolName)+"："+reason)
+	}
+	if len(details) == 0 {
+		return "模型服务连接检测未通过"
+	}
+	return "模型服务连接检测未通过。" + strings.Join(details, "；")
 }
 
 func codexEndToEndPendingMessage(check capabilityCheck, otherAdvancedVerified bool) string {
@@ -792,7 +847,7 @@ func capabilityPendingMessage(label string, check capabilityCheck) string {
 
 func preferCodexCompatibility(current, candidate codexCompatibilityReport) codexCompatibilityReport {
 	rank := map[string]int{"unavailable": 1, "incompatible": 2, "unverified": 3, "degraded": 4, "full": 5}
-	if rank[candidate.Status] > rank[current.Status] {
+	if rank[candidate.Status] > rank[current.Status] || (candidate.Status == "unverified" && current.Status == "unverified" && candidate.Confidence > current.Confidence) {
 		return candidate
 	}
 	// If neither endpoint supports Codex's native custom-tool contract, prefer
@@ -856,6 +911,7 @@ func (s *Server) probeAdditionalModels(ctx context.Context, baseURL, apiKey stri
 // proves that AI Router can repair/translate the provider, while this check is
 // the gate for advertising Codex's official custom-provider path.
 func (s *Server) verifyCodexDirect(ctx context.Context, p config.Provider) capabilityCheck {
+	ctx = providerprofile.WithProbeSession(ctx)
 	started := time.Now()
 	model := ""
 	if len(p.Models) > 0 {
@@ -956,6 +1012,7 @@ func errorCodeForRequest(ctx context.Context, err error) string {
 }
 
 func (s *Server) verifyCodexEndToEnd(ctx context.Context, p config.Provider) capabilityCheck {
+	ctx = providerprofile.WithProbeSession(ctx)
 	started := time.Now()
 	model := ""
 	if len(p.Models) > 0 {
@@ -1011,8 +1068,10 @@ func (s *Server) verifyCodexEndToEnd(ctx context.Context, p config.Provider) cap
 		return capabilityCheck{State: capabilityInconclusive, Confidence: 0.5, Status: recorder.Code, LatencyMS: time.Since(started).Milliseconds(), ErrorCode: "codex_custom_tool_call_id_missing", Error: "Codex custom tool event did not contain a call ID", body: resultBody}
 	}
 	followUpBody := common.Raw(map[string]any{
-		"model": model,
+		"model":             model,
+		"max_output_tokens": 256,
 		"input": []any{
+			map[string]any{"role": "user", "content": "Apply the patch, then reply OK after the tool succeeds."},
 			map[string]any{"type": "custom_tool_call", "call_id": callID, "name": "apply_patch", "input": "*** Begin Patch\n*** End Patch"},
 			map[string]any{"type": "custom_tool_call_output", "call_id": callID, "output": "patch applied"},
 		},
@@ -1139,6 +1198,7 @@ type probeRequestOverride struct {
 }
 
 func (s *Server) runProviderCheckWithStrategy(ctx context.Context, p config.Provider, kind providerProbeKind, strategy toolChoiceStrategy, override *probeRequestOverride) capabilityCheck {
+	ctx = providerprofile.WithProbeSession(ctx)
 	started := time.Now()
 	if p.Timeout > 0 {
 		var cancel context.CancelFunc
@@ -1194,6 +1254,9 @@ func (s *Server) runProviderCheckWithStrategy(ctx context.Context, p config.Prov
 		result.State = capabilityUnsupported
 		result.Confidence = 0.9
 		result.ErrorCode, result.Error = classifyProviderError(response.StatusCode, body)
+		if p.APIKey != "" {
+			result.Error = strings.ReplaceAll(result.Error, p.APIKey, "[REDACTED]")
+		}
 		if isAvailabilityError(result.ErrorCode) {
 			result.State = capabilityInconclusive
 		}
@@ -1591,6 +1654,7 @@ func applyProviderProbeHeaders(request *http.Request, p config.Provider) {
 		}
 		request.Header.Set(key, value)
 	}
+	providerprofile.ApplyOpenCodeHeaders(request, p)
 }
 
 func classifyProviderError(status int, body []byte) (string, string) {

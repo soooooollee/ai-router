@@ -400,7 +400,7 @@ func TestDetectProviderBeforeSave(t *testing.T) {
 	}
 	streamBody, _ := io.ReadAll(streamResponse.Body)
 	_ = streamResponse.Body.Close()
-	if streamResponse.StatusCode != http.StatusOK || !strings.Contains(streamResponse.Header.Get("content-type"), "text/event-stream") || !bytes.Contains(streamBody, []byte("event: progress")) || !bytes.Contains(streamBody, []byte("event: result")) || !bytes.Contains(streamBody, []byte(`"detector_version":7`)) {
+	if streamResponse.StatusCode != http.StatusOK || !strings.Contains(streamResponse.Header.Get("content-type"), "text/event-stream") || !bytes.Contains(streamBody, []byte("event: progress")) || !bytes.Contains(streamBody, []byte("event: result")) || !bytes.Contains(streamBody, []byte(fmt.Sprintf(`"detector_version":%d`, providerDetectorVersion))) {
 		t.Fatalf("streaming detection did not return progress and result events: status=%d body=%s", streamResponse.StatusCode, streamBody)
 	}
 }

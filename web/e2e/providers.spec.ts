@@ -1,6 +1,26 @@
 import { expect, test } from "@playwright/test";
 import { login } from "./helpers";
 
+test("provider detection shows upstream status and reason", async ({ page }) => {
+  await login(page);
+  await page.route("**/api/providers/detect?stream=1", async (route) => {
+    const result = {
+      ok: false,
+      attempts: [{ protocol: "openai-chat", status: 400, error: "Request is missing x-opencode-session" }],
+      codex_compatibility: { status: "unavailable", message: "未检测到可访问的 OpenAI 协议端点" },
+    };
+    await route.fulfill({ contentType: "text/event-stream", body: `event: result\ndata: ${JSON.stringify(result)}\n\n` });
+  });
+  await page.getByRole("button", { name: "+ 接入模型" }).click();
+  await page.getByLabel("API 地址").fill("https://opencode.ai/inference/go/openai/v1");
+  await page.getByLabel("API Key").fill("test-key");
+  await page.getByLabel("模型名称").fill("glm-5.3");
+  await page.getByRole("button", { name: "测试连接并自动识别协议" }).click();
+  await expect(page.locator(".dialog .notice.error")).toContainText("HTTP 400");
+  await expect(page.locator(".dialog .notice.error")).toContainText("Request is missing x-opencode-session");
+  await expect(page.getByRole("button", { name: "确认接入并加入模型列表" })).toBeDisabled();
+});
+
 test("provider detection and local API key display", async ({ page }) => {
   await login(page);
   await expect(page.getByText("e2e-provider-key", { exact: true })).toBeVisible();

@@ -1426,6 +1426,13 @@ func validJSON(b []byte) []byte {
 	return x
 }
 func providerModelsURL(p config.Provider) string {
+	if providerprofile.IsOpenCodeGo(p.BaseURL) && strings.Contains(p.BaseURL, "/inference/go/") {
+		u, _ := url.Parse(p.BaseURL)
+		u.Path = "/inference/go/v1/models"
+		u.RawQuery = ""
+		u.Fragment = ""
+		return u.String()
+	}
 	base := strings.TrimRight(p.BaseURL, "/")
 	if p.Protocol == ir.Gemini {
 		if !strings.Contains(base, "/v1beta") {

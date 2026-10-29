@@ -37,7 +37,7 @@ type DetectionResult = {
   detector_version?: number;
   cached?: boolean;
   model_reports?: Record<string, { protocol?: string; basic: CapabilityCheck }>;
-  attempts?: Array<{ protocol?: string; status?: number; error?: string }>;
+  attempts?: Array<{ protocol?: string; status?: number; error?: string; error_code?: string }>;
   protocols?: Record<string, ProtocolCapabilities>;
   codex_compatibility?: {
     status: "full" | "degraded" | "unverified" | "incompatible" | "unavailable";
@@ -90,7 +90,8 @@ function capabilityDiagnostic(check?: CapabilityCheck) {
       ? `${(check.latency_ms / 1000).toFixed(1)} 秒`
       : `${check.latency_ms} ms`
     : "";
-  return [reason, latency].filter(Boolean).join(" · ");
+  const detail = check.error && check.error !== reason ? check.error : "";
+  return [check.status ? `HTTP ${check.status}` : "", reason, detail, latency].filter(Boolean).join(" · ");
 }
 
 function capabilityResultText(check?: CapabilityCheck) {
@@ -291,11 +292,11 @@ export function ProviderDialog({
         setDetection(result);
         const attempts = (result.attempts || [])
           .map(
-            (item: any) =>
-              `${protocolName(item.protocol)}: ${item.status || item.error || "失败"}`,
+            (item) =>
+              `${protocolName(item.protocol || "")}: ${[item.status ? `HTTP ${item.status}` : "", item.error || item.error_code || "失败"].filter(Boolean).join(" · ")}`,
           )
           .join("；");
-        throw new Error(result.codex_compatibility?.message || `没有识别出可用协议。${attempts}`);
+        throw new Error(attempts ? `模型服务连接检测未通过。${attempts}` : result.codex_compatibility?.message || "模型服务连接检测未通过");
       }
       const firstModel = models[0];
       const generatedID = generatedProviderID(

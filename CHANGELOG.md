@@ -4,6 +4,24 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+## [0.3.4] - 2026-10-29
+
+### Bug Fixes
+
+- Support OpenCode Go in connection detection and actual forwarding by adding an AI Router user agent and a stable `x-opencode-session` header, including streaming, retries and tool continuations.
+- Preserve explicit client session IDs across protocol conversion. For clients without one, derive a caller-scoped fingerprint from the opening user message; clients with identical openings or truncated histories should send an explicit session ID.
+- Preserve thinking for OpenCode models when tool calls are accepted but reasoning text is not exposed, avoiding invalid thinking-disabled requests to GLM-5.3.
+- Use OpenCode Go's shared model-list endpoint for provider connection tests.
+- Show HTTP status and the upstream rejection reason when provider detection fails, instead of reporting every rejection as a missing OpenAI endpoint.
+
+### Maintenance
+
+- Update frontend build and test dependencies to patched versions for release security checks.
+
+### Distribution
+
+- Publish macOS and Windows binaries for both amd64 and arm64, alongside the existing Linux builds.
+
 ## [0.3.3] - 2026-08-10
 
 ### Bug Fixes

@@ -343,6 +343,9 @@ func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.
 	decision, routeErr := routing.Resolve(c, routing.Input{Request: req, Protocol: ir.Anthropic, Headers: headers})
 	if routeErr == nil && len(decision.Targets) > 0 {
 		target := decision.Targets[0]
+		if providerprofile.IsOpenCodeGo(target.Provider.BaseURL) {
+			r = r.WithContext(providerprofile.WithConversation(r.Context(), r.Header, req, principal.ClientID+":"+principal.CredentialID, body))
+		}
 		if providerprofile.ProviderCapabilities(target.Provider, target.Model).NativeTokenCount {
 			if tokens, nativeErr := g.nativeTokenCount(r.Context(), req, target); nativeErr == nil {
 				countUsage.InputTokens = tokens
@@ -401,6 +404,7 @@ func (g *Gateway) nativeTokenCount(ctx context.Context, request *ir.Request, tar
 			req.Header.Set(key, value)
 		}
 	}
+	providerprofile.ApplyOpenCodeHeaders(req, target.Provider)
 	g.clientMu.RLock()
 	client := g.RestrictedClient
 	if target.Provider.AllowPrivateURL {
@@ -543,6 +547,12 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		record.ErrorCode = "not_found"
 		errorOut(w, clientProtocol, 404, "not_found", err.Error(), id)
 		return
+	}
+	for _, target := range decision.Targets {
+		if providerprofile.IsOpenCodeGo(target.Provider.BaseURL) {
+			r = r.WithContext(providerprofile.WithConversation(r.Context(), r.Header, canonical, principal.ClientID+":"+principal.CredentialID, body))
+			break
+		}
 	}
 	record.RouteID = decision.RouteID
 	var upstream *http.Response
@@ -816,6 +826,7 @@ func (g *Gateway) do(ctx context.Context, p config.Provider, payload []byte, str
 			req.Header.Set(k, v)
 		}
 	}
+	providerprofile.ApplyOpenCodeHeaders(req, p)
 	g.clientMu.RLock()
 	client := g.RestrictedClient
 	if p.AllowPrivateURL {
