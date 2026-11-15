@@ -18,6 +18,14 @@ type Limiter struct {
 	inflight map[string]int
 }
 
+// A bucket that has fully refilled is indistinguishable from a new one, so it
+// can be dropped. Sweeping starts only once the map grows past a threshold, to
+// keep the common case allocation-free.
+const (
+	idleEvictionAfter   = 10 * time.Minute
+	evictionSweepAtSize = 256
+)
+
 func New() *Limiter {
 	return &Limiter{buckets: map[string]*bucket{}, inflight: map[string]int{}}
 }
@@ -34,6 +42,9 @@ func (l *Limiter) Allow(clientID string, requestsPerMinute, burst int, now time.
 	}
 	l.mu.Lock()
 	defer l.mu.Unlock()
+	if len(l.buckets) > evictionSweepAtSize {
+		l.evictIdleLocked(now)
+	}
 	b := l.buckets[clientID]
 	if b == nil || b.rate != requestsPerMinute || b.burst != burst {
 		b = &bucket{tokens: float64(burst), last: now, rate: requestsPerMinute, burst: burst}
@@ -55,6 +66,24 @@ func (l *Limiter) Allow(clientID string, requestsPerMinute, burst int, now time.
 	}
 	b.tokens--
 	return true
+}
+
+// evictIdleLocked drops buckets that a new client would be given anyway: the
+// bucket has been idle long enough to refill completely, so deleting it cannot
+// change any decision. Buckets with concurrent requests in flight are kept.
+func (l *Limiter) evictIdleLocked(now time.Time) {
+	for clientID, b := range l.buckets {
+		if l.inflight[clientID] > 0 {
+			continue
+		}
+		idle := now.Sub(b.last)
+		if idle < idleEvictionAfter {
+			continue
+		}
+		if b.tokens+idle.Minutes()*float64(b.rate) >= float64(b.burst) {
+			delete(l.buckets, clientID)
+		}
+	}
 }
 
 func (l *Limiter) Acquire(clientID string, maxConcurrent int) (func(), bool) {
