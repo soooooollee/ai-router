@@ -1109,6 +1109,62 @@ func TestStrictRejectsLossDetectedByTargetEncoder(t *testing.T) {
 	}
 }
 
+func TestStrictRejectionNamesLostFields(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		_, _ = w.Write(responseFor(ir.Anthropic))
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL, ir.Anthropic)
+	c.Conversion.UnsupportedFields = "strict"
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	body := `{"model":"alias","seed":7,"messages":[{"role":"user","content":"hello"}]}`
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	raw, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusUnprocessableEntity || hits.Load() != 0 {
+		t.Fatalf("strict request was not rejected before reaching upstream: status=%d hits=%d body=%s", resp.StatusCode, hits.Load(), raw)
+	}
+	// A generic rejection left users guessing which field was the problem.
+	for _, want := range []string{"unsupported_request_field", "seed"} {
+		if !strings.Contains(string(raw), want) {
+			t.Fatalf("rejection must name the lost field %q: %s", want, raw)
+		}
+	}
+}
+
+func TestCrossProtocolSamplingLossIsReported(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(responseFor(ir.Anthropic))
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL, ir.Anthropic)
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	body := `{"model":"alias","reasoning_effort":"high","messages":[{"role":"user","content":"hello"}]}`
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		raw, _ := io.ReadAll(resp.Body)
+		t.Fatalf("warn mode must still forward: status=%d body=%s", resp.StatusCode, raw)
+	}
+	// reasoning_effort has no Anthropic equivalent; the drop must be observable.
+	reported := strings.Join(resp.Header.Values("x-airoute-diagnostic"), ",")
+	if !strings.Contains(reported, "reasoning_effort_not_portable") {
+		t.Fatalf("sampling loss was not reported: %q", reported)
+	}
+}
+
 func TestPrivateUpstreamBlockedByDefault(t *testing.T) {
 	hits := atomic.Int64{}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { hits.Add(1); _, _ = w.Write(responseFor(ir.OpenAIChat)) }))
@@ -1343,4 +1399,43 @@ func responseFor(p ir.Protocol) []byte {
 	}
 	b, _ := json.Marshal(map[string]string{"error": "unsupported"})
 	return b
+}
+
+func TestStreamFailureEmitsErrorEventAndRecordsFailure(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("content-type", "text/event-stream")
+		_, _ = io.WriteString(w, "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"partial\"}}\n\n")
+		_, _ = io.WriteString(w, "event: content_block_delta\ndata: {not json}\n\n")
+	}))
+	defer upstream.Close()
+	logs := observe.NewStore(10)
+	c := testConfig(upstream.URL, ir.Anthropic)
+	g := gateway.New(config.NewStore(c), testRegistry(), logs, &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	_, body := clientRequest(ir.OpenAIChat, true)
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if !strings.Contains(string(raw), "partial") {
+		t.Fatalf("stream did not deliver the first event: %s", raw)
+	}
+	// A truncated stream used to just stop; the client must be told it failed.
+	if !strings.Contains(string(raw), `"error"`) {
+		t.Fatalf("broken stream ended without an error event: %s", raw)
+	}
+	records := logs.List(1)
+	if len(records) != 1 {
+		t.Fatalf("expected one request record, got %#v", records)
+	}
+	if records[0].ErrorCode != "protocol_conversion_error" {
+		t.Fatalf("stream failure was not recorded: %#v", records[0])
+	}
+	// The HTTP status was already sent as 200, so the record must not claim success.
+	if records[0].Status != http.StatusBadGateway {
+		t.Fatalf("failed stream was recorded as status %d", records[0].Status)
+	}
 }

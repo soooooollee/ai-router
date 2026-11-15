@@ -11,10 +11,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"math"
-	mathrand "math/rand/v2"
 	"net/http"
-	"net/url"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -50,8 +47,6 @@ type Gateway struct {
 	ClientAccess     *clientauth.Manager
 	enabled          atomic.Bool
 }
-
-var errLossyConversion = errors.New("request requires a lossy protocol conversion")
 
 func New(c *config.Store, r *protocol.Registry, logs *observe.Store, metrics *observe.Metrics, logger *slog.Logger) *Gateway {
 	current := c.Get()
@@ -530,11 +525,6 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		errorOut(w, clientProtocol, 422, "protocol_conversion_error", "remote image URLs are rejected by configuration", id)
 		return
 	}
-	if hasErrorDiagnostic(diagnostics) {
-		record.Status = 422
-		errorOut(w, clientProtocol, 422, "protocol_conversion_error", "request requires a lossy protocol conversion", id)
-		return
-	}
 	headers := map[string]string{}
 	for k, v := range r.Header {
 		if len(v) > 0 {
@@ -571,8 +561,8 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 			g.Metrics.Fallbacks.Add(1)
 		}
 		canonical.Model = t.Model
-		if clientProtocol != t.Provider.Protocol && c.Conversion.UnsupportedFields == "strict" && common.IsLossy(diagnostics) {
-			finalErr = errLossyConversion
+		if lossy := strictConversionLoss(c, clientProtocol, t.Provider.Protocol, diagnostics); len(lossy) > 0 {
+			finalErr = lossyConversionError(lossy)
 			continue
 		}
 		outAdapter, e := g.Registry.Get(t.Provider.Protocol)
@@ -604,8 +594,10 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 			finalErr = e
 			continue
 		}
-		if clientProtocol != t.Provider.Protocol && c.Conversion.UnsupportedFields == "strict" && common.IsLossy(d) {
-			finalErr = errLossyConversion
+		// Source-side loss was already rejected above, so this only has to
+		// judge what the target encoder itself would lose.
+		if lossy := strictConversionLoss(c, clientProtocol, t.Provider.Protocol, d); len(lossy) > 0 {
+			finalErr = lossyConversionError(lossy)
 			continue
 		}
 		for attempt := 1; attempt <= c.Retry.MaxAttempts; attempt++ {
@@ -762,326 +754,6 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	_, _ = w.Write(encoded)
 }
 
-func bridgeCodexCustomTools(request *ir.Request) {
-	if request == nil {
-		return
-	}
-	for index := range request.Tools {
-		if request.Tools[index].Type == "custom" {
-			request.Tools[index].Type = "function"
-		}
-	}
-	for messageIndex := range request.Messages {
-		for blockIndex := range request.Messages[messageIndex].Content {
-			block := &request.Messages[messageIndex].Content[blockIndex]
-			if block.SourceType == "custom" {
-				block.SourceType = "function"
-			}
-		}
-	}
-}
-
-// Claude App only accepts Claude-shaped model identifiers in its discovery
-// profile. The application adapter encodes the real AI Router alias as hex so
-// the gateway can restore it before normal route matching.
-func decodeClaudeAppRouteModel(model string) string {
-	const prefix = "anthropic/claude-ccr-h"
-	if !strings.HasPrefix(strings.ToLower(model), prefix) {
-		return model
-	}
-	decoded, err := hex.DecodeString(model[len(prefix):])
-	if err != nil || len(decoded) == 0 {
-		return model
-	}
-	return string(decoded)
-}
-
-func (g *Gateway) do(ctx context.Context, p config.Provider, payload []byte, stream bool, model string) (*http.Response, error) {
-	endpoint, err := providerEndpoint(p, stream, model)
-	if err != nil {
-		return nil, err
-	}
-	if err := secure.ValidatePublicTarget(ctx, endpoint, p.AllowPrivateURL); err != nil {
-		return nil, err
-	}
-	ctx, cancel := context.WithTimeout(ctx, p.Timeout)
-	defer func() {
-		if ctx.Err() != nil {
-			cancel()
-		}
-	}()
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	req.Header.Set("content-type", "application/json")
-	req.Header.Set("accept", "application/json")
-	providerprofile.ApplyAuthenticationHeaders(req.Header, p)
-	if p.Protocol == ir.Anthropic {
-		req.Header.Set("anthropic-version", "2023-06-01")
-	}
-	for k, v := range p.Headers {
-		if allowedProviderHeader(k) {
-			req.Header.Set(k, v)
-		}
-	}
-	providerprofile.ApplyOpenCodeHeaders(req, p)
-	g.clientMu.RLock()
-	client := g.RestrictedClient
-	if p.AllowPrivateURL {
-		client = g.Client
-	}
-	g.clientMu.RUnlock()
-	resp, err := client.Do(req)
-	if err != nil {
-		cancel()
-		return nil, err
-	}
-	resp.Body = &cancelBody{ReadCloser: resp.Body, cancel: cancel}
-	return resp, nil
-}
-
-type cancelBody struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-}
-
-func (c *cancelBody) Close() error { e := c.ReadCloser.Close(); c.cancel(); return e }
-
-func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.Response, dec *streaming.Decoder, prefetched []streaming.Event, clientProtocol, providerProtocol ir.Protocol, model, id string, customTools map[string]bool, captureBody bool, record *observe.Record) {
-	defer resp.Body.Close()
-	decoderAdapter, _ := g.Registry.Get(providerProtocol)
-	encoderAdapter, _ := g.Registry.Get(clientProtocol)
-	w.Header().Set("content-type", "text/event-stream")
-	w.Header().Set("cache-control", "no-cache")
-	w.Header().Set("connection", "keep-alive")
-	w.WriteHeader(200)
-	flusher, _ := w.(http.Flusher)
-	if dec == nil {
-		dec = streaming.NewDecoder(resp.Body, 8<<20)
-	}
-	first := true
-	responseID := id
-	pendingGeminiTools := map[int]ir.ContentBlock{}
-	pendingGeminiArgs := map[int]string{}
-	sequence := 0
-	normalizer := ir.NewStreamNormalizer()
-	customToolIndexes := map[int]bool{}
-	var lastUsage *ir.Usage
-	capturedEvents := make([]ir.Event, 0, 64)
-	capturedBytes := 0
-	captureTruncated := false
-	if captureBody {
-		defer func() {
-			payload, _ := json.Marshal(map[string]any{"stream": true, "truncated": captureTruncated, "events": capturedEvents})
-			record.ResponseBody = string(payload)
-		}()
-	}
-	for eventIndex := 0; ; eventIndex++ {
-		var se streaming.Event
-		var err error
-		if eventIndex < len(prefetched) {
-			se = prefetched[eventIndex]
-		} else {
-			se, err = dec.Next()
-		}
-		if err != nil {
-			if err != io.EOF && ctx.Err() == nil {
-				record.ErrorCode = "upstream_stream_error"
-				g.Metrics.Errors.Add(1)
-				writeEncodedStreamError(w, flusher, encoderAdapter, ctx, responseID, "upstream_unavailable", err.Error())
-			}
-			return
-		}
-		events, d, err := decoderAdapter.DecodeStreamEvent(ctx, se.Name, se.Data)
-		record.Diagnostics = append(record.Diagnostics, d...)
-		if err != nil {
-			record.ErrorCode = "protocol_conversion_error"
-			g.Metrics.Errors.Add(1)
-			writeEncodedStreamError(w, flusher, encoderAdapter, ctx, responseID, "protocol_conversion_error", err.Error())
-			return
-		}
-		for _, event := range events {
-			if event.Type == "tool_call.start" && event.Block != nil && customTools[event.Block.Name] {
-				event.Block.SourceType = "custom"
-				customToolIndexes[event.Index] = true
-			}
-			if event.Type == "tool_call.arguments.delta" && customToolIndexes[event.Index] {
-				event.Block = &ir.ContentBlock{Type: "tool_call", SourceType: "custom"}
-			}
-			if event.Model == "" {
-				event.Model = model
-			}
-			if event.ResponseID != "" {
-				responseID = event.ResponseID
-			} else {
-				event.ResponseID = responseID
-			}
-			if first && (event.Type == "text.delta" || event.Type == "reasoning.delta" || event.Type == "tool_call.start") {
-				first = false
-				record.FirstTokenMS = time.Since(record.StartedAt).Milliseconds()
-			}
-			if event.Usage != nil {
-				if lastUsage == nil {
-					lastUsage = &ir.Usage{}
-				}
-				mergeStreamUsage(lastUsage, *event.Usage)
-				record.Usage = *lastUsage
-			}
-			for _, normalized := range normalizer.Push(event) {
-				sequence++
-				normalized.Sequence = sequence
-				if captureBody {
-					eventSize := len(normalized.Delta) + len(normalized.Arguments) + len(normalized.Raw) + 128
-					if capturedBytes+eventSize <= 1<<20 {
-						capturedEvents = append(capturedEvents, normalized)
-						capturedBytes += eventSize
-					} else {
-						captureTruncated = true
-					}
-				}
-				if normalized.Type == "response.end" && normalized.Usage == nil {
-					normalized.Usage = lastUsage
-				}
-				clientEvents := []ir.Event{normalized}
-				if clientProtocol == ir.Gemini {
-					clientEvents = bufferGeminiToolEvents(normalized, pendingGeminiTools, pendingGeminiArgs)
-				}
-				for _, clientEvent := range clientEvents {
-					chunks, d, err := encoderAdapter.EncodeStreamEvent(ctx, clientEvent)
-					record.Diagnostics = append(record.Diagnostics, d...)
-					if err != nil {
-						record.ErrorCode = "protocol_conversion_error"
-						return
-					}
-					for _, chunk := range chunks {
-						if err := streaming.Write(w, chunk.Event, chunk.Data); err != nil {
-							return
-						}
-						if flusher != nil {
-							flusher.Flush()
-						}
-					}
-				}
-			}
-		}
-	}
-}
-
-func mergeStreamUsage(total *ir.Usage, next ir.Usage) {
-	if total == nil {
-		return
-	}
-	total.InputTokens = max(total.InputTokens, next.InputTokens)
-	total.OutputTokens = max(total.OutputTokens, next.OutputTokens)
-	total.CachedTokens = max(total.CachedTokens, next.CachedTokens)
-	total.ReasoningTokens = max(total.ReasoningTokens, next.ReasoningTokens)
-	total.TotalTokens = max(total.TotalTokens, next.TotalTokens)
-	total.TotalTokens = max(total.TotalTokens, total.InputTokens+total.OutputTokens)
-}
-
-func customToolNames(request *ir.Request) map[string]bool {
-	result := map[string]bool{}
-	if request == nil {
-		return result
-	}
-	for _, tool := range request.Tools {
-		if tool.Type == "custom" && tool.Name != "" {
-			result[tool.Name] = true
-		}
-	}
-	return result
-}
-
-func markCustomToolCalls(response *ir.Response, customTools map[string]bool) {
-	if response == nil || len(customTools) == 0 {
-		return
-	}
-	for messageIndex := range response.Messages {
-		for blockIndex := range response.Messages[messageIndex].Content {
-			block := &response.Messages[messageIndex].Content[blockIndex]
-			if block.Type == "tool_call" && customTools[block.Name] {
-				block.SourceType = "custom"
-			}
-		}
-	}
-}
-
-func writeEncodedStreamError(w io.Writer, flusher http.Flusher, adapter protocol.Adapter, ctx context.Context, responseID, typ, message string) {
-	chunks, _, err := adapter.EncodeStreamEvent(ctx, ir.Event{Type: "error", ResponseID: responseID, Error: &ir.Error{Type: typ, Message: redactSnippet([]byte(message))}})
-	if err != nil {
-		return
-	}
-	for _, chunk := range chunks {
-		if streaming.Write(w, chunk.Event, chunk.Data) != nil {
-			return
-		}
-		if flusher != nil {
-			flusher.Flush()
-		}
-	}
-}
-
-func bufferGeminiToolEvents(e ir.Event, tools map[int]ir.ContentBlock, args map[int]string) []ir.Event {
-	switch e.Type {
-	case "tool_call.start":
-		if e.Block != nil {
-			tools[e.Index] = *e.Block
-		}
-		return nil
-	case "tool_call.arguments.delta":
-		args[e.Index] += e.Arguments
-		return nil
-	case "content.end":
-		if tool, ok := tools[e.Index]; ok {
-			tool.Arguments = json.RawMessage(args[e.Index])
-			delete(tools, e.Index)
-			delete(args, e.Index)
-			return []ir.Event{{Type: "tool_call.start", Index: e.Index, ResponseID: e.ResponseID, Block: &tool}}
-		}
-	case "message.end", "response.end":
-		out := make([]ir.Event, 0, len(tools)+1)
-		for index, tool := range tools {
-			tool.Arguments = json.RawMessage(args[index])
-			out = append(out, ir.Event{Type: "tool_call.start", Index: index, ResponseID: e.ResponseID, Block: &tool})
-			delete(tools, index)
-			delete(args, index)
-		}
-		out = append(out, e)
-		return out
-	}
-	return []ir.Event{e}
-}
-
-func providerEndpoint(p config.Provider, stream bool, model string) (string, error) {
-	base := strings.TrimRight(p.BaseURL, "/")
-	switch p.Protocol {
-	case ir.OpenAIChat:
-		return appendEndpoint(base, "/chat/completions"), nil
-	case ir.OpenAIResponses:
-		return appendEndpoint(base, "/responses"), nil
-	case ir.Anthropic:
-		return appendEndpoint(base, "/messages"), nil
-	case ir.Gemini:
-		if !strings.Contains(base, "/v1beta") {
-			base += "/v1beta"
-		}
-		action := "generateContent"
-		if stream {
-			action = "streamGenerateContent"
-		}
-		return base + "/models/" + url.PathEscape(model) + ":" + action + "?alt=sse", nil
-	default:
-		return "", fmt.Errorf("unsupported provider protocol %q", p.Protocol)
-	}
-}
-func appendEndpoint(base, suffix string) string {
-	if strings.HasSuffix(base, "/v1") || strings.HasSuffix(base, "/v1beta") {
-		return base + suffix
-	}
-	return base + "/v1" + suffix
-}
 func protocolFromPath(p string) (ir.Protocol, string, bool) {
 	switch {
 	case p == "/v1/chat/completions" || p == "/chat/completions":
@@ -1103,27 +775,6 @@ func injectGemini(raw []byte, model string, stream bool) []byte {
 	}
 	v["model"] = model
 	v["stream"] = stream
-	return common.Raw(v)
-}
-
-func rewriteNativeRequest(raw []byte, model string, p ir.Protocol) ([]byte, error) {
-	var v map[string]any
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return nil, err
-	}
-	v["model"] = model
-	return sanitizeProviderPayload(common.Raw(v), p), nil
-}
-func sanitizeProviderPayload(raw []byte, p ir.Protocol) []byte {
-	if p != ir.Gemini {
-		return raw
-	}
-	var v map[string]any
-	if json.Unmarshal(raw, &v) != nil {
-		return raw
-	}
-	delete(v, "model")
-	delete(v, "stream")
 	return common.Raw(v)
 }
 
@@ -1153,129 +804,13 @@ func readRequestBody(r *http.Request, max int64) ([]byte, error) {
 		return nil, fmt.Errorf("unsupported content-encoding %q", encoding)
 	}
 }
-func retryStatus(statuses []int, s int) bool {
-	for _, x := range statuses {
-		if x == s {
-			return true
-		}
-	}
-	return false
-}
-func fallbackAllowed(policy config.Fallback, status int, body []byte, err error) bool {
-	if errors.Is(err, context.Canceled) {
-		return false
-	}
-	if errors.Is(err, context.DeadlineExceeded) {
-		return policy.OnTimeout == nil || *policy.OnTimeout
-	}
-	if status == 0 && err != nil {
-		return policy.OnNetworkError == nil || *policy.OnNetworkError
-	}
-	statuses := policy.OnStatus
-	if len(statuses) == 0 {
-		statuses = []int{429, 500, 502, 503, 504}
-	}
-	if retryStatus(statuses, status) {
-		return true
-	}
-	_, code, _ := normalizeUpstreamError(status, body, err)
-	for _, allowed := range policy.OnErrorCodes {
-		if allowed == code {
-			return true
-		}
-	}
-	return false
-}
-func backoff(r config.Retry, attempt int, resp *http.Response) time.Duration {
-	if resp != nil {
-		if v := resp.Header.Get("Retry-After"); v != "" {
-			if n, e := strconv.Atoi(v); e == nil {
-				return min(time.Duration(n)*time.Second, time.Minute)
-			}
-			if when, e := http.ParseTime(v); e == nil {
-				return min(max(time.Duration(0), time.Until(when)), time.Minute)
-			}
-		}
-	}
-	d := time.Duration(float64(r.BaseDelay) * math.Pow(2, float64(attempt-1)))
-	if d > r.MaxDelay {
-		d = r.MaxDelay
-	}
-	return d + time.Duration(mathrand.Int64N(max(int64(1), int64(d/4))))
-}
-func sleepContext(ctx context.Context, d time.Duration) bool {
-	t := time.NewTimer(d)
-	defer t.Stop()
-	select {
-	case <-ctx.Done():
-		return false
-	case <-t.C:
-		return true
-	}
-}
-func allowedProviderHeader(k string) bool {
-	n := strings.ToLower(k)
-	return n != "authorization" && n != "x-api-key" && n != "host" && n != "connection" && n != "content-length"
-}
 
-func hasErrorDiagnostic(d []ir.Diagnostic) bool {
-	for _, x := range d {
-		if x.Severity == "error" {
-			return true
-		}
-	}
-	return false
-}
 func requestID() string {
 	b := make([]byte, 12)
 	_, _ = rand.Read(b)
 	return "req_" + hex.EncodeToString(b)
 }
-func redactSnippet(b []byte) string {
-	s := string(b)
-	if len(s) > 512 {
-		s = s[:512]
-	}
-	return strings.ReplaceAll(strings.ReplaceAll(s, "\n", " "), "\r", " ")
-}
 
-func normalizeUpstreamError(status int, body []byte, e error) (int, string, string) {
-	if errors.Is(e, context.Canceled) {
-		return 499, "client_cancelled", "client cancelled request"
-	}
-	if errors.Is(e, context.DeadlineExceeded) {
-		return http.StatusGatewayTimeout, "upstream_timeout", "request deadline exceeded"
-	}
-	message := redactSnippet(body)
-	if message == "" && e != nil {
-		message = e.Error()
-	}
-	if message == "" {
-		message = "upstream unavailable"
-	}
-	lower := strings.ToLower(message)
-	switch {
-	case status == 429:
-		return 429, "rate_limited", message
-	case status == 400 && strings.Contains(lower, "context"):
-		return 400, "context_length_exceeded", message
-	case status == 400:
-		return 400, "invalid_request", message
-	case status == 413:
-		return 400, "context_length_exceeded", message
-	case status == 401 || status == 403:
-		if status == 403 {
-			return 502, "permission_denied", "upstream permission denied"
-		}
-		return 502, "authentication_error", "upstream credentials were rejected"
-	case status == 404:
-		return 404, "not_found", message
-	case strings.Contains(lower, "safety") || strings.Contains(lower, "content filter"):
-		return 400, "content_filtered", message
-	default:
-		return 502, "upstream_unavailable", message
-	}
-}
 func errorOut(w http.ResponseWriter, p ir.Protocol, status int, typ, message, id string) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("x-airoute-request-id", id)
