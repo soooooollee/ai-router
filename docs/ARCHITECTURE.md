@@ -1,6 +1,6 @@
 # AI Router 架构说明
 
-本文描述 AI Router（`github.com/zbss/airoute`，命令 `air`）的整体结构、数据流、模块边界与已知问题，供新人和改动前的定位使用。协议字段级的细节以代码和 `schemas/config.v1.schema.json` 为准。
+本文描述 AI Router（`github.com/soooooollee/ai-router`，命令 `air`）的整体结构、数据流、模块边界与已知问题，供新人和改动前的定位使用。协议字段级的细节以代码和 `schemas/config.v1.schema.json` 为准。
 
 ## 1. 它是什么
 

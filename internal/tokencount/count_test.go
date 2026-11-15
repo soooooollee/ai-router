@@ -4,7 +4,7 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 func TestHeuristicCountsLanguageCodeToolsAndMedia(t *testing.T) {

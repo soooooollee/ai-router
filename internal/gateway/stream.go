@@ -7,10 +7,10 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	"github.com/zbss/airoute/internal/streaming"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/streaming"
 )
 
 func (g *Gateway) stream(w http.ResponseWriter, ctx context.Context, resp *http.Response, dec *streaming.Decoder, prefetched []streaming.Event, clientProtocol, providerProtocol ir.Protocol, model, id string, customTools map[string]bool, captureBody bool, record *observe.Record) {

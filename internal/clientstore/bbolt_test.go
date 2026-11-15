@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 	bolt "go.etcd.io/bbolt"
 )
 

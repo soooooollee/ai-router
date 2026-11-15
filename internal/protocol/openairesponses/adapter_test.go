@@ -6,8 +6,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/zbss/airoute/internal/protocol/ir"
-	"github.com/zbss/airoute/internal/protocol/openaichat"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/openaichat"
 )
 
 func TestInstructionRolesBecomeChatSystemMessage(t *testing.T) {

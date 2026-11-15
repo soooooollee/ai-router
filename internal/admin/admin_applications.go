@@ -9,8 +9,8 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/zbss/airoute/internal/application"
-	"github.com/zbss/airoute/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/application"
+	"github.com/soooooollee/ai-router/internal/clientstore"
 )
 
 func applicationConfigurationCounts(ctx context.Context, registry *application.Registry) (configured, total int) {

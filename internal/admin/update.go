@@ -14,10 +14,10 @@ import (
 )
 
 // releaseRepository publishes AI Router releases. The module path is
-// github.com/zbss/airoute because this checkout is a fork that keeps its own
+// github.com/soooooollee/ai-router because this checkout is a fork that keeps its own
 // module path, so the two intentionally differ: point the update check at the
 // fork that actually ships binaries with AIROUTE_RELEASE_REPO (or
-// -X github.com/zbss/airoute/internal/admin.releaseRepository=owner/repo).
+// -X github.com/soooooollee/ai-router/internal/admin.releaseRepository=owner/repo).
 var releaseRepository = "soooooollee/ai-router"
 
 func releaseRepo() string {

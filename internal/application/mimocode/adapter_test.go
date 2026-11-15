@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zbss/airoute/internal/application"
+	"github.com/soooooollee/ai-router/internal/application"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

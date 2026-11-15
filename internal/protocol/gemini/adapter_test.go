@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/gemini"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/gemini"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 func encodeAll(t *testing.T, events ...ir.Event) []protocol.SSE {

@@ -9,10 +9,10 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/gateway"
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/gateway"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 type openCodeTransport func(*http.Request) (*http.Response, error)

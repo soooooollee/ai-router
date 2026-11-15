@@ -15,11 +15,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	providerprofile "github.com/zbss/airoute/internal/provider"
-	"github.com/zbss/airoute/internal/secure"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	providerprofile "github.com/soooooollee/ai-router/internal/provider"
+	"github.com/soooooollee/ai-router/internal/secure"
 )
 
 func (g *Gateway) do(ctx context.Context, p config.Provider, payload []byte, stream bool, model string) (*http.Response, error) {

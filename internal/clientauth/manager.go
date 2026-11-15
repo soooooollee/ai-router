@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/clientstore"
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	"github.com/zbss/airoute/internal/ratelimit"
-	"github.com/zbss/airoute/internal/tokencount"
+	"github.com/soooooollee/ai-router/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/ratelimit"
+	"github.com/soooooollee/ai-router/internal/tokencount"
 )
 
 type Principal struct {

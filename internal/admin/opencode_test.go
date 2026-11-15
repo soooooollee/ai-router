@@ -8,11 +8,11 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	providerprofile "github.com/zbss/airoute/internal/provider"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	providerprofile "github.com/soooooollee/ai-router/internal/provider"
 )
 
 type openCodeTransport func(*http.Request) (*http.Response, error)

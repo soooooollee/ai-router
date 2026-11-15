@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/application"
-	"github.com/zbss/airoute/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/application"
+	"github.com/soooooollee/ai-router/internal/clientstore"
 )
 
 func (s *Server) getPolicy(w http.ResponseWriter, r *http.Request, clientID string) {

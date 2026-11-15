@@ -9,8 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/safefile"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/safefile"
 	"gopkg.in/yaml.v3"
 )
 

@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 var errLossyConversion = errors.New("request requires a lossy protocol conversion")

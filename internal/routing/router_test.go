@@ -3,8 +3,8 @@ package routing
 import (
 	"testing"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 func TestResolvePrioritySpecificityAndFallback(t *testing.T) {

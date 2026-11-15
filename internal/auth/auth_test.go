@@ -4,7 +4,7 @@ import (
 	"net/http/httptest"
 	"testing"
 
-	"github.com/zbss/airoute/internal/config"
+	"github.com/soooooollee/ai-router/internal/config"
 )
 
 func TestClientAndAdminAuthentication(t *testing.T) {

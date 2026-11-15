@@ -11,9 +11,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/clientstore"
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/safefile"
+	"github.com/soooooollee/ai-router/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/safefile"
 	"gopkg.in/yaml.v3"
 )
 

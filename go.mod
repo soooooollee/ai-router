@@ -1,4 +1,4 @@
-module github.com/zbss/airoute
+module github.com/soooooollee/ai-router
 
 // go is the minimum supported toolchain language version. CI, Docker and
 // release builds intentionally pin a newer patch release; see

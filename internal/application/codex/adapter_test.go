@@ -13,7 +13,7 @@ import (
 	"testing"
 
 	"github.com/pelletier/go-toml/v2"
-	"github.com/zbss/airoute/internal/application"
+	"github.com/soooooollee/ai-router/internal/application"
 )
 
 type roundTripFunc func(*http.Request) (*http.Response, error)

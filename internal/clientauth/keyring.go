@@ -17,8 +17,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/clientstore"
-	"github.com/zbss/airoute/internal/safefile"
+	"github.com/soooooollee/ai-router/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/safefile"
 )
 
 const (

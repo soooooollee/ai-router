@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 func TestLoadAndValidate(t *testing.T) {

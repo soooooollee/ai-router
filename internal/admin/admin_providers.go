@@ -9,9 +9,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	providerprofile "github.com/zbss/airoute/internal/provider"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	providerprofile "github.com/soooooollee/ai-router/internal/provider"
 )
 
 func (s *Server) probe(w http.ResponseWriter, r *http.Request, id string) {

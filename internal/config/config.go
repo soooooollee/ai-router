@@ -21,9 +21,9 @@ import (
 	"time"
 
 	jsonschema "github.com/santhosh-tekuri/jsonschema/v5"
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	configschemas "github.com/zbss/airoute/schemas"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	configschemas "github.com/soooooollee/ai-router/schemas"
 	"gopkg.in/yaml.v3"
 )
 

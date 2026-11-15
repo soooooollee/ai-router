@@ -10,10 +10,10 @@ import (
 	"net/url"
 	"strings"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	providerprofile "github.com/zbss/airoute/internal/provider"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	providerprofile "github.com/soooooollee/ai-router/internal/provider"
 )
 
 func (s *Server) doProviderProbeRequest(ctx context.Context, p config.Provider, endpoint string, payload []byte, accept string) (int, string, []byte, error) {

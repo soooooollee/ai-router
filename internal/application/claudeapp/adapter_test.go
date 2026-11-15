@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/zbss/airoute/internal/application"
+	"github.com/soooooollee/ai-router/internal/application"
 )
 
 func desiredJSON(baseURL string) json.RawMessage {

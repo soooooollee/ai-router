@@ -3,8 +3,8 @@ package common_test
 import (
 	"testing"
 
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 var allProtocols = []ir.Protocol{ir.OpenAIChat, ir.OpenAIResponses, ir.Anthropic, ir.Gemini}

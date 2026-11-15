@@ -4,9 +4,9 @@ import (
 	"context"
 	"encoding/json"
 
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 type Adapter struct{}

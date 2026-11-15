@@ -17,14 +17,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/anthropic"
-	"github.com/zbss/airoute/internal/protocol/gemini"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	"github.com/zbss/airoute/internal/protocol/openaichat"
-	"github.com/zbss/airoute/internal/protocol/openairesponses"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/anthropic"
+	"github.com/soooooollee/ai-router/internal/protocol/gemini"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/openaichat"
+	"github.com/soooooollee/ai-router/internal/protocol/openairesponses"
 	"gopkg.in/yaml.v3"
 )
 

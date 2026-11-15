@@ -15,13 +15,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zbss/airoute/internal/application"
-	"github.com/zbss/airoute/internal/clientauth"
-	"github.com/zbss/airoute/internal/clientstore"
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/gateway"
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/application"
+	"github.com/soooooollee/ai-router/internal/clientauth"
+	"github.com/soooooollee/ai-router/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/gateway"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol"
 	"gopkg.in/yaml.v3"
 )
 

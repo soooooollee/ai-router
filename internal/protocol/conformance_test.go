@@ -6,13 +6,13 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/anthropic"
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/gemini"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	"github.com/zbss/airoute/internal/protocol/openaichat"
-	"github.com/zbss/airoute/internal/protocol/openairesponses"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/anthropic"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/gemini"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/openaichat"
+	"github.com/soooooollee/ai-router/internal/protocol/openairesponses"
 )
 
 func TestAllRequestConversionDirections(t *testing.T) {

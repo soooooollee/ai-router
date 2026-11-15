@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol"
 )
 
 func TestBackoffRespectsRetryAfterHTTPDate(t *testing.T) {

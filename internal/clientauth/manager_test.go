@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zbss/airoute/internal/clientstore"
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 func testManager(t *testing.T, policy clientstore.ClientPolicy) (*Manager, *config.Config, string) {

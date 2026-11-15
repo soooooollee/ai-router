@@ -5,8 +5,8 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/zbss/airoute/internal/clientauth"
-	"github.com/zbss/airoute/internal/clientstore"
+	"github.com/soooooollee/ai-router/internal/clientauth"
+	"github.com/soooooollee/ai-router/internal/clientstore"
 )
 
 func TestClientStateBackupVerifyAndRestoreCommands(t *testing.T) {

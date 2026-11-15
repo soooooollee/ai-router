@@ -12,17 +12,17 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/gateway"
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/anthropic"
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	"github.com/zbss/airoute/internal/protocol/openaichat"
-	"github.com/zbss/airoute/internal/protocol/openairesponses"
-	providerprofile "github.com/zbss/airoute/internal/provider"
-	"github.com/zbss/airoute/internal/secure"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/gateway"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/anthropic"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol/openaichat"
+	"github.com/soooooollee/ai-router/internal/protocol/openairesponses"
+	providerprofile "github.com/soooooollee/ai-router/internal/provider"
+	"github.com/soooooollee/ai-router/internal/secure"
 )
 
 type codexCompatibilityReport struct {

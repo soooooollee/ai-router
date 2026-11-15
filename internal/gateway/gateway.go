@@ -19,17 +19,17 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/zbss/airoute/internal/clientauth"
-	"github.com/zbss/airoute/internal/config"
-	"github.com/zbss/airoute/internal/observe"
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/common"
-	"github.com/zbss/airoute/internal/protocol/ir"
-	providerprofile "github.com/zbss/airoute/internal/provider"
-	"github.com/zbss/airoute/internal/routing"
-	"github.com/zbss/airoute/internal/secure"
-	"github.com/zbss/airoute/internal/streaming"
-	"github.com/zbss/airoute/internal/tokencount"
+	"github.com/soooooollee/ai-router/internal/clientauth"
+	"github.com/soooooollee/ai-router/internal/config"
+	"github.com/soooooollee/ai-router/internal/observe"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/common"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
+	providerprofile "github.com/soooooollee/ai-router/internal/provider"
+	"github.com/soooooollee/ai-router/internal/routing"
+	"github.com/soooooollee/ai-router/internal/secure"
+	"github.com/soooooollee/ai-router/internal/streaming"
+	"github.com/soooooollee/ai-router/internal/tokencount"
 )
 
 type Gateway struct {

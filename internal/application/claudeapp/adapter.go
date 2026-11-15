@@ -16,8 +16,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/zbss/airoute/internal/application"
-	"github.com/zbss/airoute/internal/safefile"
+	"github.com/soooooollee/ai-router/internal/application"
+	"github.com/soooooollee/ai-router/internal/safefile"
 )
 
 const configID = "8f69f2f1-3275-4ad8-9317-4aa7e972f311"

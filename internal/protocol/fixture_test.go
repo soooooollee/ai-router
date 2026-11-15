@@ -11,8 +11,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/zbss/airoute/internal/protocol"
-	"github.com/zbss/airoute/internal/protocol/ir"
+	"github.com/soooooollee/ai-router/internal/protocol"
+	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
 
 // updateGolden rewrites tests/fixtures/golden from the current adapters:

@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/zbss/airoute/internal/config"
+	"github.com/soooooollee/ai-router/internal/config"
 )
 
 func ClientKey(r *http.Request, c *config.Config) (string, bool) {

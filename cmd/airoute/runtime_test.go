@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/zbss/airoute/internal/config"
+	"github.com/soooooollee/ai-router/internal/config"
 )
 
 func TestRuntimeStateRoundTripUsesPrivateFiles(t *testing.T) {
