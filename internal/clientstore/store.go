@@ -26,6 +26,7 @@ type Store interface {
 	SettleUsage(context.Context, Scope, UsageDelta) error
 	AddRejectedUsage(context.Context, Scope, string, time.Time) error
 	GetUsage(context.Context, Scope, string, UsageQuery) (UsageSummary, error)
+	PruneUsage(context.Context, time.Time) (int, error)
 
 	AppendAudit(context.Context, Scope, AuditEvent) error
 	ListAudit(context.Context, Scope, AuditFilter) ([]AuditEvent, error)
