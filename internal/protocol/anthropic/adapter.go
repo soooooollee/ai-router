@@ -32,6 +32,7 @@ func (*Adapter) DecodeRequest(_ context.Context, raw json.RawMessage) (*ir.Reque
 		case "enabled", "adaptive":
 			enabled := true
 			r.Sampling.ReasoningEnabled = &enabled
+			r.Sampling.ReasoningBudget = common.Int(thinking["budget_tokens"])
 		}
 	}
 	for _, s := range common.Array(v["stop_sequences"]) {
@@ -78,6 +79,14 @@ func (*Adapter) EncodeRequest(_ context.Context, r *ir.Request) (json.RawMessage
 	}
 	if r.Sampling.ReasoningEnabled != nil && !*r.Sampling.ReasoningEnabled {
 		v["thinking"] = map[string]any{"type": "disabled"}
+	} else if budget := r.Sampling.ReasoningBudget; budget > 0 {
+		// Anthropic rejects budget_tokens that are not smaller than max_tokens.
+		if limit, ok := v["max_tokens"].(int); ok && limit > 0 && budget >= limit {
+			budget = limit - 1
+		}
+		if budget > 0 {
+			v["thinking"] = map[string]any{"type": "enabled", "budget_tokens": budget}
+		}
 	}
 	if len(r.Tools) > 0 {
 		tools := make([]any, 0, len(r.Tools))

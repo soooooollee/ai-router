@@ -1,0 +1,40 @@
+{
+  "output": {
+    "chunks": [
+      {
+        "data": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "hello"
+                  }
+                ],
+                "role": "model"
+              },
+              "index": 0
+            }
+          ]
+        },
+        "event": ""
+      },
+      {
+        "data": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ]
+        },
+        "event": ""
+      }
+    ]
+  },
+  "diagnostics": null
+}

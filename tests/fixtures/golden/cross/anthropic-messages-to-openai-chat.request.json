@@ -1,0 +1,49 @@
+{
+  "output": {
+    "max_completion_tokens": 64,
+    "messages": [
+      {
+        "content": "Be concise.",
+        "role": "system"
+      },
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "text"
+          },
+          {
+            "image_url": {
+              "url": "https://example.com/image.png"
+            },
+            "type": "image_url"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "fixture-model",
+    "stream": true,
+    "stream_options": {
+      "include_usage": true
+    },
+    "tools": [
+      {
+        "function": {
+          "description": "",
+          "name": "lookup",
+          "parameters": {
+            "properties": {
+              "q": {
+                "type": "string"
+              }
+            },
+            "type": "object"
+          }
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "diagnostics": null
+}

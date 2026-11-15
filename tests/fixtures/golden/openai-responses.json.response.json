@@ -1,0 +1,29 @@
+{
+  "output": {
+    "id": "fixture-response",
+    "model": "fixture-model",
+    "object": "response",
+    "output": [
+      {
+        "content": [
+          {
+            "annotations": [],
+            "text": "hello",
+            "type": "output_text"
+          }
+        ],
+        "id": "msg_fixture-response",
+        "role": "assistant",
+        "status": "completed",
+        "type": "message"
+      }
+    ],
+    "status": "completed",
+    "usage": {
+      "input_tokens": 3,
+      "output_tokens": 2,
+      "total_tokens": 5
+    }
+  },
+  "diagnostics": null
+}

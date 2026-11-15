@@ -1,0 +1,27 @@
+{
+  "output": {
+    "candidates": [
+      {
+        "content": {
+          "parts": [
+            {
+              "text": "hello"
+            }
+          ],
+          "role": "model"
+        },
+        "finishReason": "STOP",
+        "index": 0
+      }
+    ],
+    "modelVersion": "fixture-model",
+    "usageMetadata": {
+      "cachedContentTokenCount": 0,
+      "candidatesTokenCount": 2,
+      "promptTokenCount": 3,
+      "thoughtsTokenCount": 0,
+      "totalTokenCount": 5
+    }
+  },
+  "diagnostics": null
+}

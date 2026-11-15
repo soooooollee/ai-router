@@ -1,0 +1,48 @@
+{
+  "output": {
+    "contents": [
+      {
+        "parts": [
+          {
+            "text": "hello"
+          },
+          {
+            "fileData": {
+              "fileUri": "https://example.com/image.png",
+              "mimeType": ""
+            }
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "fixture-model",
+    "stream": true,
+    "systemInstruction": {
+      "parts": [
+        {
+          "text": "Be concise."
+        }
+      ]
+    },
+    "tools": [
+      {
+        "functionDeclarations": [
+          {
+            "description": "",
+            "name": "lookup",
+            "parameters": {
+              "properties": {
+                "q": {
+                  "type": "string"
+                }
+              },
+              "type": "object"
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "diagnostics": null
+}

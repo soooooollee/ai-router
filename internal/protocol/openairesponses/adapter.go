@@ -266,7 +266,7 @@ func (*Adapter) EncodeResponse(_ context.Context, r *ir.Response) (json.RawMessa
 	if len(text) > 0 {
 		output = append(output, map[string]any{"type": "message", "id": "msg_" + r.ID, "status": "completed", "role": "assistant", "content": text})
 	}
-	usage := map[string]any{"input_tokens": r.Usage.InputTokens, "output_tokens": r.Usage.OutputTokens, "total_tokens": r.Usage.TotalTokens}
+	usage := map[string]any{"input_tokens": r.Usage.InputTokens, "output_tokens": r.Usage.OutputTokens, "total_tokens": r.Usage.Total()}
 	if r.Usage.CachedTokens > 0 {
 		usage["input_tokens_details"] = map[string]any{"cached_tokens": r.Usage.CachedTokens}
 	}
@@ -413,7 +413,7 @@ func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE
 	case "response.end":
 		response := map[string]any{"id": e.ResponseID, "object": "response", "status": "completed", "model": e.Model, "output": []any{}}
 		if e.Usage != nil {
-			usage := map[string]any{"input_tokens": e.Usage.InputTokens, "output_tokens": e.Usage.OutputTokens, "total_tokens": e.Usage.TotalTokens}
+			usage := map[string]any{"input_tokens": e.Usage.InputTokens, "output_tokens": e.Usage.OutputTokens, "total_tokens": e.Usage.Total()}
 			if e.Usage.CachedTokens > 0 {
 				usage["input_tokens_details"] = map[string]any{"cached_tokens": e.Usage.CachedTokens}
 			}

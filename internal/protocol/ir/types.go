@@ -79,6 +79,7 @@ type SamplingOptions struct {
 	Stop             []string `json:"stop,omitempty"`
 	ReasoningEffort  string   `json:"reasoning_effort,omitempty"`
 	ReasoningEnabled *bool    `json:"reasoning_enabled,omitempty"`
+	ReasoningBudget  int      `json:"reasoning_budget_tokens,omitempty"`
 }
 
 type Response struct {
@@ -96,6 +97,15 @@ type Usage struct {
 	CachedTokens    int `json:"cached_tokens,omitempty"`
 	ReasoningTokens int `json:"reasoning_tokens,omitempty"`
 	TotalTokens     int `json:"total_tokens,omitempty"`
+}
+
+// Total reports the total token count, deriving it from the component counts
+// when the source protocol does not report one (Anthropic, for example).
+func (u Usage) Total() int {
+	if u.TotalTokens >= u.InputTokens+u.OutputTokens {
+		return u.TotalTokens
+	}
+	return u.InputTokens + u.OutputTokens
 }
 
 type Event struct {

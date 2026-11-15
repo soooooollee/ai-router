@@ -1,0 +1,39 @@
+{
+  "output": {
+    "input": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "input_text"
+          },
+          {
+            "image_url": "https://example.com/image.png",
+            "type": "input_image"
+          }
+        ],
+        "role": "user",
+        "type": "message"
+      }
+    ],
+    "instructions": "Be concise.",
+    "model": "fixture-model",
+    "stream": true,
+    "tools": [
+      {
+        "description": "",
+        "name": "lookup",
+        "parameters": {
+          "properties": {
+            "q": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "type": "function"
+      }
+    ]
+  },
+  "diagnostics": null
+}

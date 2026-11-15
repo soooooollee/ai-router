@@ -1,0 +1,46 @@
+{
+  "output": [
+    {
+      "type": "response.start"
+    },
+    {
+      "type": "message.start",
+      "role": "assistant"
+    },
+    {
+      "type": "content.start",
+      "block": {
+        "type": "text",
+        "text": "hello"
+      }
+    },
+    {
+      "type": "text.delta",
+      "delta": "hel"
+    },
+    {
+      "type": "text.delta",
+      "delta": "lo"
+    },
+    {
+      "type": "content.end",
+      "block": {
+        "type": "text",
+        "text": "hello"
+      }
+    },
+    {
+      "type": "message.end",
+      "stop_reason": "STOP"
+    },
+    {
+      "type": "usage.update",
+      "usage": {
+        "input_tokens": 3,
+        "output_tokens": 2,
+        "total_tokens": 5
+      }
+    }
+  ],
+  "diagnostics": null
+}

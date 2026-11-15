@@ -1,0 +1,127 @@
+{
+  "output": {
+    "chunks": [
+      {
+        "data": {
+          "response": {
+            "id": "",
+            "model": "",
+            "object": "response",
+            "output": [],
+            "status": "in_progress"
+          },
+          "sequence_number": 0,
+          "type": "response.created"
+        },
+        "event": "response.created"
+      },
+      {
+        "data": {
+          "item": {
+            "content": [],
+            "id": "msg__0",
+            "role": "assistant",
+            "status": "in_progress",
+            "type": "message"
+          },
+          "output_index": 0,
+          "response_id": "",
+          "sequence_number": 0,
+          "type": "response.output_item.added"
+        },
+        "event": "response.output_item.added"
+      },
+      {
+        "data": {
+          "content_index": 0,
+          "item_id": "msg__0",
+          "output_index": 0,
+          "part": {
+            "annotations": [],
+            "text": "",
+            "type": "output_text"
+          },
+          "response_id": "",
+          "sequence_number": 0,
+          "type": "response.content_part.added"
+        },
+        "event": "response.content_part.added"
+      },
+      {
+        "data": {
+          "content_index": 0,
+          "delta": "hel",
+          "item_id": "msg__0",
+          "output_index": 0,
+          "response_id": "",
+          "sequence_number": 0,
+          "type": "response.output_text.delta"
+        },
+        "event": "response.output_text.delta"
+      },
+      {
+        "data": {
+          "content_index": 0,
+          "delta": "lo",
+          "item_id": "msg__0",
+          "output_index": 0,
+          "response_id": "",
+          "sequence_number": 0,
+          "type": "response.output_text.delta"
+        },
+        "event": "response.output_text.delta"
+      },
+      {
+        "data": {
+          "content_index": 0,
+          "item_id": "msg__0",
+          "output_index": 0,
+          "response_id": "",
+          "sequence_number": 0,
+          "text": "hello",
+          "type": "response.output_text.done"
+        },
+        "event": "response.output_text.done"
+      },
+      {
+        "data": {
+          "content_index": 0,
+          "item_id": "msg__0",
+          "output_index": 0,
+          "part": {
+            "annotations": [],
+            "text": "hello",
+            "type": "output_text"
+          },
+          "response_id": "",
+          "sequence_number": 0,
+          "type": "response.content_part.done"
+        },
+        "event": "response.content_part.done"
+      },
+      {
+        "data": {
+          "item": {
+            "content": [
+              {
+                "annotations": [],
+                "text": "hello",
+                "type": "output_text"
+              }
+            ],
+            "id": "msg__0",
+            "role": "assistant",
+            "status": "completed",
+            "type": "message"
+          },
+          "output_index": 0,
+          "response_id": "",
+          "sequence_number": 0,
+          "type": "response.output_item.done"
+        },
+        "event": "response.output_item.done"
+      }
+    ]
+  },
+  "diagnostics": null
+}

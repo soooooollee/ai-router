@@ -1,0 +1,46 @@
+{
+  "output": {
+    "max_tokens": 4096,
+    "messages": [
+      {
+        "content": [
+          {
+            "text": "hello",
+            "type": "text"
+          },
+          {
+            "source": {
+              "type": "url",
+              "url": "https://example.com/image.png"
+            },
+            "type": "image"
+          }
+        ],
+        "role": "user"
+      }
+    ],
+    "model": "fixture-model",
+    "stream": true,
+    "system": [
+      {
+        "text": "Be concise.",
+        "type": "text"
+      }
+    ],
+    "tools": [
+      {
+        "description": "",
+        "input_schema": {
+          "properties": {
+            "q": {
+              "type": "string"
+            }
+          },
+          "type": "object"
+        },
+        "name": "lookup"
+      }
+    ]
+  },
+  "diagnostics": null
+}

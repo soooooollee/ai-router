@@ -294,7 +294,7 @@ func (*Adapter) EncodeResponse(_ context.Context, r *ir.Response) (json.RawMessa
 	if len(calls) > 0 {
 		msg["tool_calls"] = calls
 	}
-	usage := map[string]any{"prompt_tokens": r.Usage.InputTokens, "completion_tokens": r.Usage.OutputTokens, "total_tokens": r.Usage.TotalTokens}
+	usage := map[string]any{"prompt_tokens": r.Usage.InputTokens, "completion_tokens": r.Usage.OutputTokens, "total_tokens": r.Usage.Total()}
 	if r.Usage.CachedTokens > 0 {
 		usage["prompt_tokens_details"] = map[string]any{"cached_tokens": r.Usage.CachedTokens}
 	}
@@ -376,7 +376,7 @@ func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE
 		if e.Usage == nil {
 			return nil, nil, nil
 		}
-		chunk := map[string]any{"id": e.ResponseID, "object": "chat.completion.chunk", "choices": []any{}, "usage": map[string]any{"prompt_tokens": e.Usage.InputTokens, "completion_tokens": e.Usage.OutputTokens, "total_tokens": e.Usage.TotalTokens}}
+		chunk := map[string]any{"id": e.ResponseID, "object": "chat.completion.chunk", "choices": []any{}, "usage": map[string]any{"prompt_tokens": e.Usage.InputTokens, "completion_tokens": e.Usage.OutputTokens, "total_tokens": e.Usage.Total()}}
 		return []protocol.SSE{{Data: common.Raw(chunk)}}, nil, nil
 	case "error":
 		return []protocol.SSE{{Data: common.Raw(map[string]any{"error": e.Error})}}, nil, nil

@@ -1,0 +1,21 @@
+{
+  "output": {
+    "content": [
+      {
+        "text": "hello",
+        "type": "text"
+      }
+    ],
+    "id": "fixture-response",
+    "model": "fixture-model",
+    "role": "assistant",
+    "stop_reason": "end_turn",
+    "stop_sequence": null,
+    "type": "message",
+    "usage": {
+      "input_tokens": 3,
+      "output_tokens": 2
+    }
+  },
+  "diagnostics": null
+}

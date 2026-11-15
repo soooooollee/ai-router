@@ -183,11 +183,33 @@ func PortabilityDiagnostics(blocks []ir.ContentBlock, target ir.Protocol, path s
 	return out
 }
 
+// SamplingPortabilityDiagnostics reports sampling controls that the target
+// protocol cannot express. Without it these controls disappear silently,
+// because each encoder simply does not write the corresponding field.
+func SamplingPortabilityDiagnostics(r *ir.Request, target ir.Protocol) []ir.Diagnostic {
+	if r.Source == target {
+		return nil
+	}
+	var out []ir.Diagnostic
+	s := r.Sampling
+	if s.TopK != nil && target != ir.Anthropic && target != ir.Gemini {
+		out = append(out, ir.Diagnostic{Severity: "warning", Code: "top_k_not_portable", Path: "sampling.top_k", Message: "target protocol has no top_k field", Action: "dropped"})
+	}
+	if s.ReasoningEffort != "" && target != ir.OpenAIChat && target != ir.OpenAIResponses {
+		out = append(out, ir.Diagnostic{Severity: "warning", Code: "reasoning_effort_not_portable", Path: "sampling.reasoning_effort", Message: "target protocol has no reasoning effort control", Action: "dropped"})
+	}
+	if s.ReasoningBudget > 0 && target != ir.Anthropic {
+		out = append(out, ir.Diagnostic{Severity: "warning", Code: "reasoning_budget_not_portable", Path: "sampling.reasoning_budget_tokens", Message: "target protocol has no explicit thinking budget", Action: "approximated"})
+	}
+	return out
+}
+
 func RequestPortabilityDiagnostics(r *ir.Request, target ir.Protocol) []ir.Diagnostic {
 	out := PortabilityDiagnostics(r.Instructions, target, "instructions")
 	for i, m := range r.Messages {
 		out = append(out, PortabilityDiagnostics(m.Content, target, fmt.Sprintf("messages[%d].content", i))...)
 	}
+	out = append(out, SamplingPortabilityDiagnostics(r, target)...)
 	if len(r.Extensions) > 0 && r.Source != target {
 		out = append(out, ir.Diagnostic{Severity: "warning", Code: "request_extensions_not_portable", Path: "extensions", Message: "source-protocol request fields cannot be sent to a different protocol", Action: "dropped"})
 	}

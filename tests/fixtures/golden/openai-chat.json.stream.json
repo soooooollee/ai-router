@@ -1,0 +1,38 @@
+{
+  "output": [
+    {
+      "type": "response.start",
+      "response_id": "fixture-response"
+    },
+    {
+      "type": "message.start",
+      "role": "assistant"
+    },
+    {
+      "type": "content.start",
+      "block": {
+        "type": "text",
+        "text": "hello"
+      }
+    },
+    {
+      "type": "text.delta",
+      "delta": "hello"
+    },
+    {
+      "type": "content.end",
+      "block": {
+        "type": "text",
+        "text": "hello"
+      }
+    },
+    {
+      "type": "message.end",
+      "stop_reason": "stop"
+    },
+    {
+      "type": "response.end"
+    }
+  ],
+  "diagnostics": null
+}

@@ -1,0 +1,70 @@
+{
+  "output": {
+    "chunks": [
+      {
+        "data": {
+          "choices": [
+            {
+              "delta": {
+                "role": "assistant"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "id": "fixture-response",
+          "object": "chat.completion.chunk"
+        },
+        "event": ""
+      },
+      {
+        "data": {
+          "choices": [
+            {
+              "delta": {
+                "content": "hello"
+              },
+              "finish_reason": null,
+              "index": 0
+            }
+          ],
+          "id": "",
+          "object": "chat.completion.chunk"
+        },
+        "event": ""
+      },
+      {
+        "data": {
+          "choices": [],
+          "id": "",
+          "object": "chat.completion.chunk",
+          "usage": {
+            "completion_tokens": 2,
+            "prompt_tokens": 3,
+            "total_tokens": 5
+          }
+        },
+        "event": ""
+      },
+      {
+        "data": {
+          "choices": [
+            {
+              "delta": {},
+              "finish_reason": "stop",
+              "index": 0
+            }
+          ],
+          "id": "",
+          "object": "chat.completion.chunk"
+        },
+        "event": ""
+      },
+      {
+        "data": "[DONE]",
+        "event": ""
+      }
+    ]
+  },
+  "diagnostics": null
+}

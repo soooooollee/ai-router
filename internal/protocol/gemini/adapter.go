@@ -252,7 +252,7 @@ func (*Adapter) DecodeResponse(_ context.Context, raw json.RawMessage) (*ir.Resp
 }
 func (*Adapter) EncodeResponse(_ context.Context, r *ir.Response) (json.RawMessage, []ir.Diagnostic, error) {
 	m := common.FirstAssistant(r)
-	v := map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"role": "model", "parts": encodeParts(m.Content)}, "finishReason": stopToGemini(r.StopReason), "index": 0}}, "usageMetadata": map[string]any{"promptTokenCount": r.Usage.InputTokens, "candidatesTokenCount": r.Usage.OutputTokens, "cachedContentTokenCount": r.Usage.CachedTokens, "thoughtsTokenCount": r.Usage.ReasoningTokens, "totalTokenCount": r.Usage.TotalTokens}, "modelVersion": r.Model}
+	v := map[string]any{"candidates": []any{map[string]any{"content": map[string]any{"role": "model", "parts": encodeParts(m.Content)}, "finishReason": stopToGemini(r.StopReason), "index": 0}}, "usageMetadata": map[string]any{"promptTokenCount": r.Usage.InputTokens, "candidatesTokenCount": r.Usage.OutputTokens, "cachedContentTokenCount": r.Usage.CachedTokens, "thoughtsTokenCount": r.Usage.ReasoningTokens, "totalTokenCount": r.Usage.Total()}, "modelVersion": r.Model}
 	return common.Raw(v), common.ResponsePortabilityDiagnostics(r, ir.Gemini), nil
 }
 func stopToGemini(s string) string {
@@ -297,6 +297,68 @@ func (*Adapter) DecodeStreamEvent(ctx context.Context, _ string, raw json.RawMes
 	}
 	return out, d, nil
 }
+
+// NewStreamEncoder buffers tool calls until their arguments are complete:
+// Gemini sends one functionCall part with the full argument object, so the
+// deltas a router receives must be reassembled before encoding.
+func (*Adapter) NewStreamEncoder() protocol.StreamEventEncoder { return &streamEncoder{} }
+
+type streamEncoder struct {
+	tools map[int]ir.ContentBlock
+	args  map[int]string
+}
+
+func (e *streamEncoder) EncodeStreamEvent(ctx context.Context, event ir.Event) ([]protocol.SSE, []ir.Diagnostic, error) {
+	var chunks []protocol.SSE
+	var diagnostics []ir.Diagnostic
+	for _, buffered := range e.buffer(event) {
+		encoded, d, err := (&Adapter{}).EncodeStreamEvent(ctx, buffered)
+		diagnostics = append(diagnostics, d...)
+		if err != nil {
+			return chunks, diagnostics, err
+		}
+		chunks = append(chunks, encoded...)
+	}
+	return chunks, diagnostics, nil
+}
+
+func (e *streamEncoder) buffer(event ir.Event) []ir.Event {
+	switch event.Type {
+	case "tool_call.start":
+		if event.Block != nil {
+			if e.tools == nil {
+				e.tools = map[int]ir.ContentBlock{}
+			}
+			e.tools[event.Index] = *event.Block
+		}
+		return nil
+	case "tool_call.arguments.delta":
+		if e.args == nil {
+			e.args = map[int]string{}
+		}
+		e.args[event.Index] += event.Arguments
+		return nil
+	case "content.end":
+		if tool, ok := e.tools[event.Index]; ok {
+			tool.Arguments = json.RawMessage(e.args[event.Index])
+			delete(e.tools, event.Index)
+			delete(e.args, event.Index)
+			return []ir.Event{{Type: "tool_call.start", Index: event.Index, ResponseID: event.ResponseID, Block: &tool}}
+		}
+	case "message.end", "response.end":
+		out := make([]ir.Event, 0, len(e.tools)+1)
+		for index, tool := range e.tools {
+			tool.Arguments = json.RawMessage(e.args[index])
+			out = append(out, ir.Event{Type: "tool_call.start", Index: index, ResponseID: event.ResponseID, Block: &tool})
+			delete(e.tools, index)
+			delete(e.args, index)
+		}
+		out = append(out, event)
+		return out
+	}
+	return []ir.Event{event}
+}
+
 func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE, []ir.Diagnostic, error) {
 	parts := []any{}
 	candidate := map[string]any{"content": map[string]any{"role": "model", "parts": parts}, "index": 0}
@@ -322,7 +384,7 @@ func (*Adapter) EncodeStreamEvent(_ context.Context, e ir.Event) ([]protocol.SSE
 		if e.Usage == nil {
 			return nil, nil, nil
 		}
-		return []protocol.SSE{{Data: common.Raw(map[string]any{"candidates": []any{}, "usageMetadata": map[string]any{"promptTokenCount": e.Usage.InputTokens, "candidatesTokenCount": e.Usage.OutputTokens, "cachedContentTokenCount": e.Usage.CachedTokens, "thoughtsTokenCount": e.Usage.ReasoningTokens, "totalTokenCount": e.Usage.TotalTokens}})}}, nil, nil
+		return []protocol.SSE{{Data: common.Raw(map[string]any{"candidates": []any{}, "usageMetadata": map[string]any{"promptTokenCount": e.Usage.InputTokens, "candidatesTokenCount": e.Usage.OutputTokens, "cachedContentTokenCount": e.Usage.CachedTokens, "thoughtsTokenCount": e.Usage.ReasoningTokens, "totalTokenCount": e.Usage.Total()}})}}, nil, nil
 	case "response.end":
 		return nil, nil, nil
 	case "error":

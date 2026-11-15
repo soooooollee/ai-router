@@ -1,0 +1,24 @@
+{
+  "output": {
+    "choices": [
+      {
+        "finish_reason": "stop",
+        "index": 0,
+        "message": {
+          "content": "hello",
+          "role": "assistant"
+        }
+      }
+    ],
+    "created": 1794754882,
+    "id": "fixture-response",
+    "model": "fixture-model",
+    "object": "chat.completion",
+    "usage": {
+      "completion_tokens": 2,
+      "prompt_tokens": 3,
+      "total_tokens": 5
+    }
+  },
+  "diagnostics": null
+}

@@ -1,0 +1,50 @@
+{
+  "output": [
+    {
+      "type": "response.start",
+      "response_id": "fixture-response"
+    },
+    {
+      "type": "usage.update",
+      "usage": {
+        "input_tokens": 3
+      }
+    },
+    {
+      "type": "message.start",
+      "role": "assistant"
+    },
+    {
+      "type": "content.start",
+      "block": {
+        "type": "text",
+        "text": "hello"
+      }
+    },
+    {
+      "type": "text.delta",
+      "delta": "hello"
+    },
+    {
+      "type": "content.end",
+      "block": {
+        "type": "text",
+        "text": "hello"
+      }
+    },
+    {
+      "type": "message.end",
+      "stop_reason": "end_turn"
+    },
+    {
+      "type": "usage.update",
+      "usage": {
+        "output_tokens": 2
+      }
+    },
+    {
+      "type": "response.end"
+    }
+  ],
+  "diagnostics": null
+}
