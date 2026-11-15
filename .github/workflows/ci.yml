@@ -7,7 +7,10 @@ permissions:
   contents: read
 jobs:
   test:
-    runs-on: ubuntu-latest
+    # Playwright 1.55 (pinned in web/package.json) has no builds for the Ubuntu
+    # 26.04 image that ubuntu-latest now resolves to, so this job stays on 24.04.
+    # Revisit together with the next Playwright upgrade.
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v6
