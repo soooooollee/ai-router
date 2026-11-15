@@ -11,7 +11,7 @@ Thank you for helping improve AI Router. Bug reports, focused feature proposals,
 
 ## Development setup
 
-AI Router requires Go 1.24+ and Node.js 22+.
+AI Router requires Go 1.24+ and Node.js 22+. The `go` directive in `go.mod` is the minimum language version; CI, Docker and release builds pin a newer patch release (currently Go 1.27.3), so a change that only builds on the newer toolchain is not acceptable.
 
 ```bash
 git clone https://github.com/soooooollee/ai-router.git

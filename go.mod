@@ -1,5 +1,8 @@
 module github.com/zbss/airoute
 
+// go is the minimum supported toolchain language version. CI, Docker and
+// release builds intentionally pin a newer patch release; see
+// .github/workflows/ci.yml, Dockerfile and CONTRIBUTING.md.
 go 1.24
 
 require gopkg.in/yaml.v3 v3.0.1

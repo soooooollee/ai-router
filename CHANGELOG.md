@@ -4,6 +4,33 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+### Bug Fixes
+
+- Name the fields a `conversion.unsupported_fields: strict` rejection would lose, instead of returning a generic "request requires a lossy protocol conversion". The strict check is now a single helper, and a previously unreachable branch that depended on a diagnostic severity no adapter emits has been removed.
+- Report cross-protocol loss of `top_k`, `reasoning_effort`, and `thinking.budget_tokens` as diagnostics (`top_k_not_portable`, `reasoning_effort_not_portable`, `reasoning_budget_not_portable`) so strict mode rejects them and `warn` mode surfaces them through `x-airoute-diagnostic`.
+- Preserve the Anthropic `thinking.budget_tokens` value across protocol conversion instead of dropping it, and keep the encoded budget below `max_tokens`.
+- Make credential deployment safe to retry: previews now run before the credential is stored, so a rejected configuration no longer leaves a live but unused key. A failed apply or verification rolls back the applications written by that request in reverse order, and the credential is released when the rollback is complete. A partially rolled back deployment keeps the credential and returns its secret for manual recovery.
+- Only revoke the previous credential after every application was written and verified, instead of revoking the key the client still uses when the deployment fails.
+- Retain `usage_minute` buckets for 24 hours and prune them at most once an hour from the write path, so the client state database stops growing without bound. Daily usage is kept indefinitely.
+- Emit an explicit error event when a stream fails after the first event, instead of ending the response silently. Such requests are recorded with status 502 rather than being counted as successful 200 responses, which previously made truncated streams invisible in logs and metrics.
+- Evict fully refilled idle rate-limit buckets so a long-lived process no longer keeps one bucket per client forever. A bucket is only dropped once it would have refilled completely, so eviction cannot change any decision.
+- Always redact provider keys, administrator tokens, and static API keys in `GET /api/config` and `GET /api/providers`; `logging.web_redaction` now only controls request and response body redaction. Saving the redacted document restores secrets from disk as before, and a masked secret without an original value (for example a provider added in the raw editor) is rejected with `unrestorable_secret` instead of being written verbatim.
+- Honor `AIROUTE_RELEASE_REPO` (and the `releaseRepository` build variable) when checking for updates, so a fork is not told about releases from a repository it does not publish to.
+- Warn at startup when `auth.enabled` is off, because anonymous principals bypass every client policy, quota, and rate limit.
+- Derive `total_tokens` from the component counts when a source protocol does not report one (Anthropic never does), instead of forwarding `total_tokens: 0` to OpenAI Chat, OpenAI Responses and Gemini clients.
+
+### Maintenance
+
+- Split the largest packages by responsibility without changing behavior: `internal/gateway` (4 files), `internal/admin` (12 files, including separate `credentials.go` and `deployments.go`), `internal/application/codex` (6 files), `internal/application/pi` (3 files) and `internal/clientstore` (store, clients, usage). Declarations were moved verbatim, so the diff is pure relocation; no source file now exceeds 888 lines.
+- Add cross-protocol goldens covering all 16 source/target protocol combinations for both requests and normalized streams (`tests/fixtures/golden/cross/`), and move Gemini's tool-argument buffering into the Gemini adapter behind a new `protocol.StreamEncoder` so the gateway no longer carries protocol-specific stream logic.
+
+### Documentation
+
+- Add `docs/ARCHITECTURE.md` describing the process topology, package boundaries, request path, IR, configuration, and known issues.
+- Document the toolchain policy in `go.mod`: the `go` directive is the minimum language version while CI and release builds pin a newer patch release.
+- State in `SECURITY.md` that client policies and quotas only apply to authenticated requests.
+- Turn the checked-in protocol fixtures into golden tests: request, response, and normalized stream artifacts are compared structurally, including the diagnostics each conversion reports. Regenerate with `go test ./internal/protocol/ -run TestCheckedInProtocolFixtures -update` and review the diff.
+
 ## [0.3.4] - 2026-10-29
 
 ### Bug Fixes

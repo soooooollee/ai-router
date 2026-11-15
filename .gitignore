@@ -16,3 +16,5 @@ airoute-requests.jsonl*
 airoute.yaml
 airoute.yaml.bak.*
 /examples/*.yaml.bak.*
+# Generated review artifacts (PDF exports of docs)
+/output/

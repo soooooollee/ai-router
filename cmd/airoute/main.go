@@ -310,6 +310,10 @@ func serve(args []string) error {
 	if missing := keyRing.Missing(requiredHMACKeyIDs); len(missing) > 0 {
 		return fmt.Errorf("managed client state requires unavailable HMAC master keys: %s", strings.Join(missing, ", "))
 	}
+	if !c.Auth.Enabled {
+		logger.Warn("client authentication is disabled: every request bypasses client policies, quotas and rate limits",
+			"managed_store", c.Auth.ManagedStoreEnabled(), "legacy_keys", len(c.Auth.Keys))
+	}
 	clientAccess := clientauth.NewManager(clientState, keyRing)
 	gw := gateway.New(store, reg, logs, metrics, logger)
 	gw.SetClientAccess(clientAccess)

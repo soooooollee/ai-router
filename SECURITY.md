@@ -31,6 +31,7 @@ Remove API keys, tokens, prompts, responses, local paths, and other personal dat
 - Complete managed client keys are returned to the browser only during creation or rotation. The state database stores an HMAC-SHA256 digest plus an AES-256-GCM encrypted copy for locally managed keys; decryption occurs only in the backend for selected application writes, and credential comparisons remain constant-time.
 - `gateway-state.db`, `credential-master.key`, and client-state backups are sensitive `0600` files under a `0700` runtime directory. Losing the master key makes its credentials unverifiable.
 - Use `air client-state backup`, `verify`, and `restore`; do not copy the database alone. Restore is intentionally offline and refuses a locked database, a checksum mismatch, or missing HMAC key generations.
+- Client policies, quotas, and rate limits apply only to authenticated requests. With `auth.enabled: false` the gateway accepts anonymous principals and enforces none of them; enable managed client keys before exposing the gateway beyond loopback. `air serve` logs a warning in that state.
 - Query-string API keys are disabled by default. If Gemini compatibility requires `auth.allow_query_key: true`, ensure every reverse proxy also redacts query strings from access logs.
 - A public model gateway should use TLS at the edge, short-lived per-client keys, CIDR restrictions where possible, and explicit RPM, concurrency, and daily quotas.
 - Request and response body capture should only be enabled temporarily for troubleshooting.
