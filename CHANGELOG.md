@@ -21,6 +21,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ### Maintenance
 
+- Build with Go 1.27.4 in CI, releases and the container image. Go 1.27.3 carries GO-2026-6859 in `net/http`, which the standard library fix in 1.27.4 resolves.
 - Split the largest packages by responsibility without changing behavior: `internal/gateway` (4 files), `internal/admin` (12 files, including separate `credentials.go` and `deployments.go`), `internal/application/codex` (6 files), `internal/application/pi` (3 files) and `internal/clientstore` (store, clients, usage). Declarations were moved verbatim, so the diff is pure relocation; no source file now exceeds 888 lines.
 - Add cross-protocol goldens covering all 16 source/target protocol combinations for both requests and normalized streams (`tests/fixtures/golden/cross/`), and move Gemini's tool-argument buffering into the Gemini adapter behind a new `protocol.StreamEncoder` so the gateway no longer carries protocol-specific stream logic.
 
