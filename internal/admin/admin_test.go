@@ -25,6 +25,7 @@ import (
 	"github.com/zbss/airoute/internal/protocol/ir"
 	"github.com/zbss/airoute/internal/protocol/openaichat"
 	"github.com/zbss/airoute/internal/protocol/openairesponses"
+	"gopkg.in/yaml.v3"
 )
 
 func requestedChatToolName(payload map[string]any) string {
@@ -182,8 +183,8 @@ logging:
 	resp = request("GET", "/api/providers", nil, "")
 	providerBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || !bytes.Contains(providerBody, []byte(`"api_key":"provider-secret"`)) {
-		t.Fatalf("provider API key was not returned to the local management UI: %s", providerBody)
+	if resp.StatusCode != http.StatusOK || bytes.Contains(providerBody, []byte(`"provider-secret"`)) || !bytes.Contains(providerBody, []byte(`"api_key_set":true`)) || !bytes.Contains(providerBody, []byte(webRedactionMask)) {
+		t.Fatalf("provider API did not redact the key while keeping its presence visible: %s", providerBody)
 	}
 	resp = request("GET", "/api/diagnostics", nil, "")
 	diagnosticBody, _ := io.ReadAll(resp.Body)
@@ -274,7 +275,9 @@ func TestRedactLogBodyForWebDisplay(t *testing.T) {
 	}
 }
 
-func TestWebRedactionCoversProvidersAndPreservesSecretsOnSave(t *testing.T) {
+// Redaction is not opt-in: the console must never receive a plaintext key, and
+// saving the redacted document must restore it from disk.
+func TestConfigAndProviderAPIsRedactSecretsByDefault(t *testing.T) {
 	t.Setenv("WEB_REDACTION_ADMIN_TOKEN", "12345678901234567890123456789012")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "airoute.yaml")
@@ -295,7 +298,6 @@ default_route:
   targets: [{provider: private-provider, model: model}]
 logging:
   level: info
-  web_redaction: true
 `
 	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
 		t.Fatal(err)
@@ -356,6 +358,89 @@ logging:
 	}
 	if !bytes.Contains(written, []byte("plaintext-provider-secret")) || bytes.Contains(written, []byte(webRedactionMask)) || !bytes.Contains(written, []byte("level: debug")) {
 		t.Fatalf("secret was not preserved during masked save: %s", written)
+	}
+}
+
+func TestConfigSaveRejectsUnrestorableMaskedSecret(t *testing.T) {
+	t.Setenv("MASK_REJECT_ADMIN_TOKEN", "12345678901234567890123456789012")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "airoute.yaml")
+	raw := `version: 1
+server:
+  admin_listen: 127.0.0.1:8081
+admin:
+  enabled: true
+  token: ${MASK_REJECT_ADMIN_TOKEN}
+providers:
+  - id: private-provider
+    name: Private Provider
+    protocol: openai-chat
+    base_url: https://example.com/v1
+    api_key: plaintext-provider-secret
+    models: [model]
+default_route:
+  targets: [{provider: private-provider, model: model}]
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	current, err := config.Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewServer(New(config.NewStore(current), protocol.NewRegistry(), observe.NewStore(10), &observe.Metrics{}, "test", "http://127.0.0.1:8080"))
+	defer server.Close()
+
+	request, _ := http.NewRequest(http.MethodGet, server.URL+"/api/config", nil)
+	request.Header.Set("authorization", "Bearer 12345678901234567890123456789012")
+	response, err := http.DefaultClient.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	configBody, _ := io.ReadAll(response.Body)
+	_ = response.Body.Close()
+	var fetched struct {
+		YAML string `json:"yaml"`
+		Hash string `json:"hash"`
+	}
+	if err = json.Unmarshal(configBody, &fetched); err != nil {
+		t.Fatal(err)
+	}
+	// Add a provider in the raw editor without replacing its masked key.
+	var document map[string]any
+	if err = yaml.Unmarshal([]byte(fetched.YAML), &document); err != nil {
+		t.Fatal(err)
+	}
+	providers, _ := document["providers"].([]any)
+	document["providers"] = append(providers, map[string]any{
+		"id": "new-provider", "name": "New Provider", "protocol": "openai-chat",
+		"base_url": "https://example.com/v1", "api_key": webRedactionMask, "models": []any{"model"},
+	})
+	addedYAML, err := yaml.Marshal(document)
+	if err != nil {
+		t.Fatal(err)
+	}
+	added := string(addedYAML)
+	payload, _ := json.Marshal(map[string]any{"yaml": added, "expected_hash": fetched.Hash})
+	saveRequest, _ := http.NewRequest(http.MethodPut, server.URL+"/api/config", bytes.NewReader(payload))
+	saveRequest.Header.Set("content-type", "application/json")
+	saveRequest.Header.Set("authorization", "Bearer 12345678901234567890123456789012")
+	saveResponse, err := http.DefaultClient.Do(saveRequest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	saveBody, _ := io.ReadAll(saveResponse.Body)
+	_ = saveResponse.Body.Close()
+	if saveResponse.StatusCode != http.StatusUnprocessableEntity || !bytes.Contains(saveBody, []byte("unrestorable_secret")) {
+		t.Fatalf("masked secret without an original value was accepted: %d %s", saveResponse.StatusCode, saveBody)
+	}
+	written, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// The rejected save must not have touched the file.
+	if !bytes.Equal(written, []byte(raw)) {
+		t.Fatalf("rejected save modified the configuration: %s", written)
 	}
 }
 

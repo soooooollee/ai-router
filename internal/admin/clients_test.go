@@ -26,16 +26,27 @@ import (
 )
 
 type credentialDeploymentAdapter struct {
-	previewErr error
-	applied    int
-	verified   int
-	config     json.RawMessage
+	previewErr  error
+	applyErr    error
+	verifyErr   error
+	rollbackErr error
+	noRollback  bool
+	backup      string
+	applied     int
+	verified    int
+	rollbacks   int
+	rolledBack  []string
+	config      json.RawMessage
 }
 
 func (a *credentialDeploymentAdapter) Manifest() application.Manifest {
+	capabilities := []application.Capability{application.CapabilityPreview, application.CapabilityConfigure, application.CapabilityVerify}
+	if !a.noRollback {
+		capabilities = append(capabilities, application.CapabilityRollback)
+	}
 	return application.Manifest{
 		ID: "test-app", Name: "Test App", Description: "Test application adapter", Status: "stable", ConfigFormat: "json",
-		Capabilities: []application.Capability{application.CapabilityPreview, application.CapabilityConfigure, application.CapabilityVerify},
+		Capabilities: capabilities,
 	}
 }
 func (a *credentialDeploymentAdapter) Detect(context.Context) (application.Detection, error) {
@@ -54,19 +65,34 @@ func (a *credentialDeploymentAdapter) Preview(_ context.Context, raw json.RawMes
 }
 func (a *credentialDeploymentAdapter) Apply(_ context.Context, raw json.RawMessage) (application.ApplyResult, error) {
 	a.applied++
+	if a.applyErr != nil {
+		return application.ApplyResult{}, a.applyErr
+	}
 	a.config = append(a.config[:0], raw...)
-	return application.ApplyResult{OK: true, Path: "/tmp/test-app.json", Backup: "/tmp/test-app.json.bak"}, nil
+	backup := a.backup
+	if backup == "" {
+		backup = "/tmp/test-app.json.bak"
+	}
+	return application.ApplyResult{OK: true, Path: "/tmp/test-app.json", Backup: backup}, nil
 }
 func (a *credentialDeploymentAdapter) Verify(context.Context, application.VerifyOptions) (application.VerifyResult, error) {
 	a.verified++
+	if a.verifyErr != nil {
+		return application.VerifyResult{Verified: time.Now()}, a.verifyErr
+	}
 	return application.VerifyResult{OK: true, Verified: time.Now()}, nil
 }
 func (a *credentialDeploymentAdapter) Backups(context.Context) ([]application.Backup, error) {
 	return nil, nil
 }
 func (a *credentialDeploymentAdapter) DeleteBackup(context.Context, string) error { return nil }
-func (a *credentialDeploymentAdapter) Rollback(context.Context, string) (application.ApplyResult, error) {
-	return application.ApplyResult{OK: true}, nil
+func (a *credentialDeploymentAdapter) Rollback(_ context.Context, backup string) (application.ApplyResult, error) {
+	a.rollbacks++
+	a.rolledBack = append(a.rolledBack, backup)
+	if a.rollbackErr != nil {
+		return application.ApplyResult{}, a.rollbackErr
+	}
+	return application.ApplyResult{OK: true, Path: "/tmp/test-app.json"}, nil
 }
 
 func clientManagementServer(t *testing.T, rawConfig string) (*Server, *clientauth.Manager, string) {
@@ -304,29 +330,143 @@ func authenticatedRequestForAdmin(secret string) *http.Request {
 	return request
 }
 
-func TestCredentialDeploymentStopsBeforeWritesWhenAnyPreviewFails(t *testing.T) {
-	server, _, _ := clientManagementServer(t, baseClientConfig())
-	good := &credentialDeploymentAdapter{}
-	bad := &credentialDeploymentAdapter{previewErr: errors.New("preview rejected")}
-	server.Applications = application.NewRegistry(good)
-	// Register a second adapter with a distinct manifest through a small wrapper.
-	server.Applications = application.NewRegistry(&namedDeploymentAdapter{credentialDeploymentAdapter: bad, id: "bad-app"}, good)
-	created := clientAPIRequest(t, server, http.MethodPost, "/api/clients", map[string]any{"name": "Preview client"})
+func deploymentClient(t *testing.T, server *Server, name string) string {
+	t.Helper()
+	created := clientAPIRequest(t, server, http.MethodPost, "/api/clients", map[string]any{"name": name})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("client create failed: %s", created.Body.String())
+	}
 	var body struct {
 		Client clientstore.Client `json:"client"`
 	}
 	if err := json.Unmarshal(created.Body.Bytes(), &body); err != nil {
 		t.Fatal(err)
 	}
-	deployed := clientAPIRequest(t, server, http.MethodPost, "/api/clients/"+body.Client.ID+"/credential-deployments", map[string]any{
+	return body.Client.ID
+}
+
+func listClientCredentials(t *testing.T, server *Server, clientID string) []clientstore.Credential {
+	t.Helper()
+	credentials, err := server.ClientStore.ListCredentials(context.Background(), clientstore.DefaultScope, clientID)
+	if err != nil {
+		t.Fatalf("list credentials: %v", err)
+	}
+	return credentials
+}
+
+func TestCredentialDeploymentStopsBeforeWritesWhenAnyPreviewFails(t *testing.T) {
+	server, _, _ := clientManagementServer(t, baseClientConfig())
+	good := &credentialDeploymentAdapter{}
+	bad := &credentialDeploymentAdapter{previewErr: errors.New("preview rejected")}
+	// Register a second adapter with a distinct manifest through a small wrapper.
+	server.Applications = application.NewRegistry(&namedDeploymentAdapter{credentialDeploymentAdapter: bad, id: "bad-app"}, good)
+	clientID := deploymentClient(t, server, "Preview client")
+	deployed := clientAPIRequest(t, server, http.MethodPost, "/api/clients/"+clientID+"/credential-deployments", map[string]any{
 		"applications": []map[string]any{{"id": "test-app", "config": map[string]any{}}, {"id": "bad-app", "config": map[string]any{}}},
 	})
 	if deployed.Code != http.StatusOK || !strings.Contains(deployed.Body.String(), `"ok":false`) || good.applied != 0 || bad.applied != 0 {
 		t.Fatalf("preview failure allowed an application write: %d %s", deployed.Code, deployed.Body.String())
 	}
-	credentials, err := server.ClientStore.ListCredentials(context.Background(), clientstore.DefaultScope, body.Client.ID)
-	if err != nil || len(credentials) != 1 {
-		t.Fatalf("credential was not retained after partial deployment: %#v %v", credentials, err)
+	var response struct {
+		CredentialCreated *bool  `json:"credential_created"`
+		Secret            string `json:"secret"`
+	}
+	if err := json.Unmarshal(deployed.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.CredentialCreated == nil || *response.CredentialCreated || response.Secret != "" {
+		t.Fatalf("preview failure must not mint a usable secret: %s", deployed.Body.String())
+	}
+	// Nothing was written, so the store must not hold a key nobody can use.
+	if credentials := listClientCredentials(t, server, clientID); len(credentials) != 0 {
+		t.Fatalf("preview failure left %d credential(s) behind: %#v", len(credentials), credentials)
+	}
+}
+
+func TestCredentialDeploymentRollsBackAndReleasesKeyWhenVerificationFails(t *testing.T) {
+	server, _, _ := clientManagementServer(t, baseClientConfig())
+	first := &credentialDeploymentAdapter{}
+	second := &credentialDeploymentAdapter{verifyErr: errors.New("verification failed")}
+	server.Applications = application.NewRegistry(first, &namedDeploymentAdapter{credentialDeploymentAdapter: second, id: "second-app"})
+	clientID := deploymentClient(t, server, "Rollback client")
+	initial := clientAPIRequest(t, server, http.MethodPost, "/api/clients/"+clientID+"/credentials", map[string]any{})
+	var initialBody struct {
+		Credential clientstore.CredentialView `json:"credential"`
+	}
+	if initial.Code != http.StatusCreated || json.Unmarshal(initial.Body.Bytes(), &initialBody) != nil {
+		t.Fatalf("initial credential failed: %s", initial.Body.String())
+	}
+	deployed := clientAPIRequest(t, server, http.MethodPost, "/api/clients/"+clientID+"/credential-deployments", map[string]any{
+		"previous_credential_id": initialBody.Credential.ID,
+		"revoke_previous":        true,
+		"applications": []map[string]any{
+			{"id": "test-app", "verify": true, "config": map[string]any{}},
+			{"id": "second-app", "verify": true, "config": map[string]any{}},
+		},
+	})
+	if deployed.Code != http.StatusOK {
+		t.Fatalf("deployment returned %d: %s", deployed.Code, deployed.Body.String())
+	}
+	var response struct {
+		OK                 bool   `json:"ok"`
+		Secret             string `json:"secret"`
+		RolledBack         bool   `json:"rolled_back"`
+		CredentialReleased bool   `json:"credential_released"`
+	}
+	if err := json.Unmarshal(deployed.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OK || !response.RolledBack || !response.CredentialReleased {
+		t.Fatalf("verify failure was not rolled back and released: %s", deployed.Body.String())
+	}
+	if response.Secret != "" {
+		t.Fatal("a released credential must not be returned as a usable secret")
+	}
+	// Newest write is undone first.
+	if second.rollbacks != 1 || first.rollbacks != 1 || second.rolledBack[0] != "/tmp/test-app.json.bak" {
+		t.Fatalf("writes were not rolled back in reverse order: second=%v first=%v", second.rolledBack, first.rolledBack)
+	}
+	remaining := listClientCredentials(t, server, clientID)
+	if len(remaining) != 1 || remaining[0].ID != initialBody.Credential.ID {
+		t.Fatalf("rolled back deployment left credentials behind: %#v", remaining)
+	}
+	// The previous key still serves the client, so it must stay active.
+	previous, err := server.ClientStore.GetCredential(context.Background(), clientstore.DefaultScope, initialBody.Credential.ID)
+	if err != nil || previous.Status != clientstore.CredentialActive {
+		t.Fatalf("failed deployment revoked the previous credential: %#v %v", previous, err)
+	}
+}
+
+func TestCredentialDeploymentKeepsKeyWhenRollbackFails(t *testing.T) {
+	server, _, _ := clientManagementServer(t, baseClientConfig())
+	first := &credentialDeploymentAdapter{}
+	second := &credentialDeploymentAdapter{verifyErr: errors.New("verification failed"), rollbackErr: errors.New("rollback exploded")}
+	server.Applications = application.NewRegistry(first, &namedDeploymentAdapter{credentialDeploymentAdapter: second, id: "second-app"})
+	clientID := deploymentClient(t, server, "Rollback failure client")
+	deployed := clientAPIRequest(t, server, http.MethodPost, "/api/clients/"+clientID+"/credential-deployments", map[string]any{
+		"applications": []map[string]any{
+			{"id": "test-app", "verify": true, "config": map[string]any{}},
+			{"id": "second-app", "verify": true, "config": map[string]any{}},
+		},
+	})
+	var response struct {
+		OK                 bool   `json:"ok"`
+		Secret             string `json:"secret"`
+		RolledBack         bool   `json:"rolled_back"`
+		CredentialReleased bool   `json:"credential_released"`
+	}
+	if err := json.Unmarshal(deployed.Body.Bytes(), &response); err != nil {
+		t.Fatal(err)
+	}
+	if response.OK || response.RolledBack || response.CredentialReleased {
+		t.Fatalf("partial rollback was reported as clean: %s", deployed.Body.String())
+	}
+	// An app may still hold the key, so it has to stay usable and visible.
+	if !strings.HasPrefix(response.Secret, "sk-") || !strings.Contains(deployed.Body.String(), `"stage":"rollback"`) {
+		t.Fatalf("rollback failure hid the surviving secret or its rollback record: %s", deployed.Body.String())
+	}
+	if credentials := listClientCredentials(t, server, clientID); len(credentials) != 1 || credentials[0].Status != clientstore.CredentialActive {
+		t.Fatalf("partially applied credential must stay active: %#v", credentials)
 	}
 }
 
