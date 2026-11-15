@@ -176,7 +176,8 @@ IR 要点：
 
 - 鉴权：`admin.token`（Bearer 或 `x-airoute-admin-token`，常量时间比较）；存在 ClientStore 时非 loopback 一律 403；校验 `Host` 与 `Origin` 防 DNS rebinding / CSRF；失败限速。
 - 端点按主题分组：状态与诊断、配置（读/校验/写/重载/备份/回滚）、providers（列表/探测/连通性）、routes（解释）、playground、applications（预览/写入/校验/备份/回滚）、clients 与 credentials、logs、metrics。
-- **密钥永远脱敏**：`GET /api/config` 与 `GET /api/providers` 返回的 `admin.token`、`auth.keys[].value`、`providers[].api_key` 一律是 `••••••••`。保存时若 YAML 里仍是掩码，服务端从磁盘原文按 id/索引回填；若某个掩码找不到原值（例如在原始编辑器里新增的 provider），直接返回 422 `unrestorable_secret`，绝不把掩码写进配置文件。`logging.web_redaction` 只额外控制请求/响应体的脱敏。
+- **完整配置永远脱敏**：`GET /api/config` 返回的 Caddy 式全量 YAML 中，`admin.token`、`auth.keys[].value`、`providers[].api_key` 一律是 `••••••••`，与运营开关无关。保存时若 YAML 里仍是掩码，服务端从磁盘原文按 id/索引回填；若某个掩码找不到原值（例如在原始编辑器里新增的 provider），直接返回 422 `unrestorable_secret`，绝不把掩码写进配置文件。
+- `GET /api/providers` 走的是另一条路径：它是本地控制台的列表视图，**默认显示密钥**以便复制，`logging.web_redaction: true` 时才改为掩码（`web/e2e/providers.spec.ts` 固定了这个行为）。这是「管理口只监听 loopback」前提下的有意取舍；`logging.web_redaction` 同时控制请求/响应体在日志详情里的脱敏。
 - 前端：无路由库，`location.hash` 手写路由；7 个页面全部懒加载并在启动后预热；`App.tsx` 持有 `status/config/yaml/hash`，`config_version` 与本地 hash 不一致时自动重载；写配置走 `configMutation.ts`（YAML 解析 + `expected_hash` + 409 重试一次）。
 - i18n：`zh-CN` / `en-US`，采用「中文原文 → 英文」的字典反查 + DOM 文本改写。改动文案时同步 `i18n.ts`。
 

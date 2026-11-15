@@ -183,8 +183,8 @@ logging:
 	resp = request("GET", "/api/providers", nil, "")
 	providerBody, _ := io.ReadAll(resp.Body)
 	resp.Body.Close()
-	if resp.StatusCode != http.StatusOK || bytes.Contains(providerBody, []byte(`"provider-secret"`)) || !bytes.Contains(providerBody, []byte(`"api_key_set":true`)) || !bytes.Contains(providerBody, []byte(webRedactionMask)) {
-		t.Fatalf("provider API did not redact the key while keeping its presence visible: %s", providerBody)
+	if resp.StatusCode != http.StatusOK || !bytes.Contains(providerBody, []byte(`"api_key":"provider-secret"`)) || !bytes.Contains(providerBody, []byte(`"api_key_set":true`)) {
+		t.Fatalf("provider API did not return the key to the local management console: %s", providerBody)
 	}
 	resp = request("GET", "/api/diagnostics", nil, "")
 	diagnosticBody, _ := io.ReadAll(resp.Body)
@@ -275,9 +275,9 @@ func TestRedactLogBodyForWebDisplay(t *testing.T) {
 	}
 }
 
-// Redaction is not opt-in: the console must never receive a plaintext key, and
-// saving the redacted document must restore it from disk.
-func TestConfigAndProviderAPIsRedactSecretsByDefault(t *testing.T) {
+// The complete configuration dump is always redacted, whatever the operator
+// setting, and saving it must restore the secrets from disk.
+func TestConfigAPIRedactsSecretsByDefault(t *testing.T) {
 	t.Setenv("WEB_REDACTION_ADMIN_TOKEN", "12345678901234567890123456789012")
 	dir := t.TempDir()
 	path := filepath.Join(dir, "airoute.yaml")
@@ -322,10 +322,6 @@ logging:
 			t.Fatalf("GET %s: %d %s", endpoint, response.StatusCode, body)
 		}
 		return body
-	}
-	providerBody := get("/api/providers")
-	if bytes.Contains(providerBody, []byte("plaintext-provider-secret")) || !bytes.Contains(providerBody, []byte(webRedactionMask)) {
-		t.Fatalf("provider key was not redacted: %s", providerBody)
 	}
 	configBody := get("/api/config")
 	if bytes.Contains(configBody, []byte("plaintext-provider-secret")) || !bytes.Contains(configBody, []byte(webRedactionMask)) {

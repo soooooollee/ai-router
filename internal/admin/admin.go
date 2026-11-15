@@ -231,7 +231,10 @@ func (s *Server) api(w http.ResponseWriter, r *http.Request) {
 		s.rollback(w, r)
 	case r.URL.Path == "/api/providers" && r.Method == "GET":
 		current := s.Config.Get()
-		jsonOut(w, 200, map[string]any{"providers": publicProviders(current, s.providerHealth(), true)})
+		// The provider list feeds the local console, which intentionally shows the
+		// key so it can be copied; logging.web_redaction hides it. The complete
+		// configuration dump below is always redacted instead.
+		jsonOut(w, 200, map[string]any{"providers": publicProviders(current, s.providerHealth(), current.Logging.WebRedaction)})
 	case r.URL.Path == "/api/providers/detect" && r.Method == "POST":
 		s.detectProvider(w, r)
 	case strings.HasPrefix(r.URL.Path, "/api/providers/") && strings.HasSuffix(r.URL.Path, "/probe") && r.Method == "POST":
