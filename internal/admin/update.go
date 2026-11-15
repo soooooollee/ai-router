@@ -7,15 +7,33 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 )
 
-const (
-	defaultReleaseAPIURL = "https://api.github.com/repos/soooooollee/ai-router/releases/latest"
-	releasesPageURL      = "https://github.com/soooooollee/ai-router/releases"
-)
+// releaseRepository publishes AI Router releases. The module path is
+// github.com/zbss/airoute because this checkout is a fork that keeps its own
+// module path, so the two intentionally differ: point the update check at the
+// fork that actually ships binaries with AIROUTE_RELEASE_REPO (or
+// -X github.com/zbss/airoute/internal/admin.releaseRepository=owner/repo).
+var releaseRepository = "soooooollee/ai-router"
+
+func releaseRepo() string {
+	if configured := strings.TrimSpace(os.Getenv("AIROUTE_RELEASE_REPO")); configured != "" {
+		return strings.Trim(configured, "/")
+	}
+	return releaseRepository
+}
+
+func releaseAPIURL() string {
+	return "https://api.github.com/repos/" + releaseRepo() + "/releases/latest"
+}
+
+func releasesPage() string {
+	return "https://github.com/" + releaseRepo() + "/releases"
+}
 
 type UpdateInfo struct {
 	Checked          bool      `json:"checked"`
@@ -38,7 +56,7 @@ func (s *Server) checkUpdate(parent context.Context) UpdateInfo {
 	current := normalizeVersion(s.Version)
 	info := UpdateInfo{
 		CurrentVersion:  current,
-		ReleaseURL:      releasesPageURL,
+		ReleaseURL:      releasesPage(),
 		CheckedAt:       now,
 		UpdateAvailable: false,
 	}
@@ -52,7 +70,7 @@ func (s *Server) checkUpdate(parent context.Context) UpdateInfo {
 	defer cancel()
 	releaseURL := s.ReleaseURL
 	if releaseURL == "" {
-		releaseURL = defaultReleaseAPIURL
+		releaseURL = releaseAPIURL()
 	}
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseURL, nil)
 	if err == nil {
@@ -81,7 +99,7 @@ func (s *Server) checkUpdate(parent context.Context) UpdateInfo {
 						info.Checked = true
 						info.LatestVersion = latest
 						info.UpdateAvailable = newerVersion(latest, current)
-						info.ReleaseURL = releasesPageURL + "/tag/" + url.PathEscape(release.TagName)
+						info.ReleaseURL = releasesPage() + "/tag/" + url.PathEscape(release.TagName)
 					}
 				}
 			}

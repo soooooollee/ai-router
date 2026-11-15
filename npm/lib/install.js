@@ -86,13 +86,24 @@ function extract(archive, destination, platform = process.platform) {
   run("tar", ["-xzf", archive, "-C", destination]);
 }
 
+// downloadBase resolves the release download prefix. AIROUTE_REPO points a fork
+// at its own releases without patching this package; AIROUTE_DOWNLOAD_BASE
+// replaces the whole URL for mirrors and offline installs.
+function downloadBase(version) {
+  const configured = process.env.AIROUTE_DOWNLOAD_BASE;
+  if (configured) {
+    return configured.trim().replace(/\/$/, "");
+  }
+  const repository = (process.env.AIROUTE_REPO || "soooooollee/ai-router").trim().replace(/^\/+|\/+$/g, "");
+  return `https://github.com/${repository}/releases/download/v${version}`;
+}
+
 async function install(options = {}) {
   const packageRoot = options.packageRoot || path.resolve(__dirname, "..");
   const packageVersion = require(path.join(packageRoot, "package.json")).version;
   const version = (process.env.AIROUTE_VERSION || packageVersion).replace(/^v/, "");
   const asset = assetName(version);
-  const base = (process.env.AIROUTE_DOWNLOAD_BASE ||
-    `https://github.com/soooooollee/ai-router/releases/download/v${version}`).replace(/\/$/, "");
+  const base = downloadBase(version);
   const temporary = fs.mkdtempSync(path.join(os.tmpdir(), "airoute-npm-"));
   const archive = path.join(temporary, asset);
   const checksumsPath = path.join(temporary, "checksums.txt");
@@ -133,4 +144,4 @@ async function install(options = {}) {
   }
 }
 
-module.exports = { expectedChecksum, extract, install, request, sha256 };
+module.exports = { downloadBase, expectedChecksum, extract, install, request, sha256 };

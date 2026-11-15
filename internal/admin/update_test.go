@@ -58,3 +58,21 @@ func TestNewerVersion(t *testing.T) {
 		}
 	}
 }
+
+func TestReleaseURLsFollowConfiguredRepository(t *testing.T) {
+	t.Setenv("AIROUTE_RELEASE_REPO", "acme/airoute")
+	if got := releaseAPIURL(); got != "https://api.github.com/repos/acme/airoute/releases/latest" {
+		t.Fatalf("release API URL = %q", got)
+	}
+	if got := releasesPage(); got != "https://github.com/acme/airoute/releases" {
+		t.Fatalf("releases page = %q", got)
+	}
+	t.Setenv("AIROUTE_RELEASE_REPO", " acme/airoute/ ")
+	if got := releasesPage(); got != "https://github.com/acme/airoute/releases" {
+		t.Fatalf("padded repository value was not normalized: %q", got)
+	}
+	t.Setenv("AIROUTE_RELEASE_REPO", "")
+	if got := releaseAPIURL(); got != "https://api.github.com/repos/soooooollee/ai-router/releases/latest" {
+		t.Fatalf("default release API URL = %q", got)
+	}
+}
