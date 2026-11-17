@@ -52,6 +52,7 @@ type ClientDraft = {
   dailyRequests: string;
   dailyInput: string;
   dailyOutput: string;
+  dailyCostUsd: string;
   maxOutput: string;
   confirmUnlimited: boolean;
 };
@@ -69,6 +70,7 @@ const emptyDraft: ClientDraft = {
   dailyRequests: "",
   dailyInput: "",
   dailyOutput: "",
+  dailyCostUsd: "",
   maxOutput: "",
   confirmUnlimited: false,
 };
@@ -121,6 +123,7 @@ function policyFromDraft(draft: ClientDraft): Omit<ClientPolicy, "id"> {
     daily_request_limit: numberValue(draft.dailyRequests),
     daily_input_tokens: numberValue(draft.dailyInput),
     daily_output_tokens: numberValue(draft.dailyOutput),
+    daily_cost_limit_micros: Math.round(Math.max(0, Number(draft.dailyCostUsd) || 0) * 1_000_000),
     max_output_tokens: numberValue(draft.maxOutput),
   };
 }
@@ -139,6 +142,7 @@ function draftFromClient(item: GatewayClient): ClientDraft {
     dailyRequests: item.policy.daily_request_limit ? String(item.policy.daily_request_limit) : "",
     dailyInput: item.policy.daily_input_tokens ? String(item.policy.daily_input_tokens) : "",
     dailyOutput: item.policy.daily_output_tokens ? String(item.policy.daily_output_tokens) : "",
+    dailyCostUsd: item.policy.daily_cost_limit_micros ? String(item.policy.daily_cost_limit_micros / 1_000_000) : "",
     maxOutput: item.policy.max_output_tokens ? String(item.policy.max_output_tokens) : "",
   };
 }
@@ -378,7 +382,7 @@ export function ClientsPage({ models }: { models: string[] }) {
       title: "今日用量",
       key: "usage",
       width: 145,
-      render: (_, row) => <span className="client-scope">{row.item.today.requests || 0} 次请求<small>{(row.item.today.input_tokens || 0) + (row.item.today.output_tokens || 0)} Token</small></span>,
+      render: (_, row) => <span className="client-scope">{row.item.today.requests || 0} 次请求<small>{(row.item.today.input_tokens || 0) + (row.item.today.output_tokens || 0)} Token{row.item.today.cost_micros ? ` · $${(row.item.today.cost_micros / 1_000_000).toFixed(4)}` : ""}</small></span>,
     },
     {
       title: "最近使用 / 到期",
@@ -465,6 +469,7 @@ function ClientDialog({ title, draft, setDraft, busy, close, submit, creating = 
       <label>每日请求<input type="number" min="0" value={draft.dailyRequests} onChange={(event) => update("dailyRequests", event.target.value)} placeholder="0 = 不限制" /></label>
       <label>每日输入 Token<input type="number" min="0" value={draft.dailyInput} onChange={(event) => update("dailyInput", event.target.value)} placeholder="0 = 不限制" /></label>
       <label>每日输出 Token<input type="number" min="0" value={draft.dailyOutput} onChange={(event) => update("dailyOutput", event.target.value)} placeholder="0 = 不限制" /></label>
+      <label>每日消费上限（USD）<input type="number" min="0" step="0.01" value={draft.dailyCostUsd} onChange={(event) => update("dailyCostUsd", event.target.value)} placeholder="0 = 不限制，按 provider 定价累计" /></label>
       <label>单次最大输出 Token<input type="number" min="0" value={draft.maxOutput} onChange={(event) => update("maxOutput", event.target.value)} placeholder="0 = 不限制" /></label>
 		{creating && gatewayPublic && !draft.rpm && !draft.concurrent && !draft.dailyRequests && !draft.dailyInput && !draft.dailyOutput && <label className="full client-unlimited-confirm"><input type="checkbox" checked={draft.confirmUnlimited} onChange={(event) => setDraft((current) => ({ ...current, confirmUnlimited: event.target.checked }))} />我确认该公网监听 Key 不设置速率、并发或每日配额</label>}
     </div>

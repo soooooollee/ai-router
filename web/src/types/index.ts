@@ -20,6 +20,7 @@ export type ClientPolicy = {
   daily_request_limit?: number;
   daily_input_tokens?: number;
   daily_output_tokens?: number;
+  daily_cost_limit_micros?: number;
   max_output_tokens?: number;
 };
 export type ClientCredential = {
@@ -40,6 +41,7 @@ export type ClientUsageBucket = {
   rejected: number;
   input_tokens: number;
   output_tokens: number;
+  cost_micros?: number;
 };
 export type GatewayClient = {
   client: {
