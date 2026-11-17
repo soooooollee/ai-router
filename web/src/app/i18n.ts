@@ -138,6 +138,8 @@ const zhToEn: Record<string, string> = {
   "每日请求": "Daily requests",
   "每日输入 Token": "Daily input tokens",
   "每日输出 Token": "Daily output tokens",
+  "每日消费上限（USD）": "Daily spend limit (USD)",
+  "0 = 不限制，按 provider 定价累计": "0 = unlimited, accumulated from provider pricing",
   "单次最大输出 Token": "Maximum output tokens per request",
   "立即配置到应用": "Deploy to applications now",
   "应用默认模型": "Application default model",
