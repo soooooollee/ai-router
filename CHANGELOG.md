@@ -12,7 +12,7 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 - Add `ClientPolicy.max_tool_rounds` to stop runaway agent loops, and `providers[].context_window` to reject oversized requests locally with 413 and let a larger-window fallback serve them.
 - Add a `/v1/embeddings` endpoint. OpenAI-compatible providers are proxied unchanged, Gemini `:embedContent`/`:batchEmbedContents` responses are normalized to the OpenAI shape, and Anthropic providers are rejected with an explanation.
 - Propagate a W3C `traceparent` to the upstream, echo `x-airoute-trace-id`, and record `trace_id` on every request log entry.
-- Show today's spend and the daily spend cap in the console, and add a `web-assets` workflow that rebuilds the committed `internal/admin/webdist` bundle on CI when the local Node toolchain cannot.
+- Show today's spend and the daily spend cap in the console, and add a `web-assets` workflow (`gh workflow run web-assets.yml`) that rebuilds the committed `internal/admin/webdist` bundle on CI when the local Node toolchain cannot.
 - Parse `max_body_size` units deterministically: `32MiB` was read as `32Mi` plus a bare `B` depending on Go's map iteration order, so the shipped `examples/airoute.full.yaml` failed roughly half the time.
 
 ### Bug Fixes

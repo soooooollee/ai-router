@@ -200,6 +200,7 @@ IR 要点：
 ## 11. 构建、测试与发布
 
 - `make build`：先 `cd web && npm test && npm run build`（产物写 `internal/admin/webdist/`），再 `go build -o bin/air`。前端产物**入仓**，改动 `web/` 必须同 commit 提交重建产物。
+- 本机 Node 工具链不可用时，用 `gh workflow run web-assets.yml`（`.github/workflows/web-assets.yml`）在 CI 构建，`gh run download <run> -n webdist -D <dir>` 取回后替换 `internal/admin/webdist/` 再提交。
 - `make check`：gofmt + `go vet` + `go test -race`。
 - 协议契约用 golden 测试固定：`tests/fixtures/golden/<protocol>.<request|response|stream>.json` 记录往返输出**和**诊断列表，任何字段丢失或诊断变化都会失败。改动协议行为后用 `go test ./internal/protocol/ -run TestCheckedInProtocolFixtures -update` 重建，并审查 diff。唯一的豁免字段是编码器取墙钟的 `created`。
 - CI：vitest、Playwright e2e（拉起真实 Go 进程 + mock provider）、`go test -race`、`scripts/test-lifecycle.sh`、govulncheck、go-licenses、npm audit、license 白名单、三平台 smoke、Docker 构建。
@@ -227,6 +228,7 @@ IR 要点：
 - 成本与预算：provider 定价、`usage_*` 的 `cost_micros`、客户端每日消费上限与 `airoute_cost_micros_total` 已落地（见 §7），控制台展示待补。
 - 健康感知路由与熔断、路由级 retry/fallback/timeout 已实现（见 §4），默认 `ordered` 不改变既有行为。
 - 工具轮次上限、上下文窗口校验、`/v1/embeddings`、`traceparent` 透传与 `x-airoute-trace-id` 已实现（见 §4/§7）。
+- 控制台已展示当日消费并支持设置每日消费上限；`internal/admin/webdist` 通过 `web-assets` 工作流重建，不再依赖本机 Node 工具链。
 
 ### 未修复（已知设计取舍）
 
@@ -234,7 +236,6 @@ IR 要点：
 |---|---|---|
 | 限流、熔断、配额都是单进程内存态 | `internal/ratelimit`、`internal/gateway/failover.go` | 重启清零、多实例之间不共享；水平扩容需要在入口层再做限流与熔断 |
 | 多租户只有数据模型 | `clientstore.Scope` | `tenant`/`project` 字段已贯穿存储与审计，但没有租户管理 API/UI，全部固定为 default |
-| 控制台不展示消耗 | `web/src/pages/ClientsPage` | 费用通过 `/api/clients/{id}/usage`、客户端列表的 `today.cost_micros` 与 Prometheus 暴露，但页面还没渲染；本机 Node 工具链不可用，`webdist` 需在有 Node 的环境执行 `npm run build` 后提交 |
 | `gateway.go` 仍有 888 行 | `internal/gateway/gateway.go` | 入口 + `handle` 主流程内聚；再拆会切断请求生命周期的可读性，暂不继续 |
 
 ## 13. 常见排障## 13. 常见排障
