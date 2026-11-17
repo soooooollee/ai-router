@@ -24,6 +24,7 @@ type Attempt struct {
 }
 type Record struct {
 	ID               string          `json:"id"`
+	TraceID          string          `json:"trace_id,omitempty"`
 	StartedAt        time.Time       `json:"started_at"`
 	ClientProtocol   ir.Protocol     `json:"client_protocol"`
 	ClientKeyID      string          `json:"client_key_id,omitempty"`
@@ -43,6 +44,7 @@ type Record struct {
 	DurationMS       int64           `json:"duration_ms"`
 	FirstTokenMS     int64           `json:"first_token_ms,omitempty"`
 	Usage            ir.Usage        `json:"usage"`
+	CostMicros       int64           `json:"cost_micros,omitempty"`
 	ErrorCode        string          `json:"error_code,omitempty"`
 	Diagnostics      []ir.Diagnostic `json:"diagnostics,omitempty"`
 	DiagnosticCodes  []string        `json:"diagnostic_codes,omitempty"`
@@ -224,6 +226,7 @@ type Metrics struct {
 	Diagnostics       atomic.Uint64
 	InputTokens       atomic.Uint64
 	OutputTokens      atomic.Uint64
+	CostMicros        atomic.Uint64
 	Completed         atomic.Uint64
 	LatencyMSTotal    atomic.Uint64
 	FirstTokenMSTotal atomic.Uint64

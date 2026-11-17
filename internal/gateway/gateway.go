@@ -46,6 +46,7 @@ type Gateway struct {
 	levelController  *slog.LevelVar
 	ClientAccess     *clientauth.Manager
 	enabled          atomic.Bool
+	breakers         breakerRegistry
 }
 
 func New(c *config.Store, r *protocol.Registry, logs *observe.Store, metrics *observe.Metrics, logger *slog.Logger) *Gateway {
@@ -155,7 +156,10 @@ func (g *Gateway) CloseIdleConnections() {
 
 func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	id := requestID()
+	traceparent := traceparentFromRequest(r.Header.Get(traceparentHeader))
+	r = r.WithContext(withTraceparent(r.Context(), traceparent))
 	w.Header().Set("x-airoute-request-id", id)
+	w.Header().Set("x-airoute-trace-id", traceID(traceparent))
 	if r.URL.Path == "/healthz" {
 		jsonOut(w, 200, map[string]any{"status": "ok"})
 		return
@@ -212,6 +216,17 @@ func (g *Gateway) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	if r.URL.Path == "/v1/models" {
 		g.serveModels(w, principal)
+		return
+	}
+	if r.URL.Path == "/v1/embeddings" || r.URL.Path == "/embeddings" {
+		if g.ClientAccess != nil {
+			if accessErr := g.ClientAccess.Precheck(r.Context(), principal, ir.OpenAIChat, r.RemoteAddr); accessErr != nil {
+				g.logRejection(c, ir.OpenAIChat, id, principal, accessErr.Status, accessErr.Code)
+				errorOut(w, ir.OpenAIChat, accessErr.Status, accessErr.Code, accessErr.Message, id)
+				return
+			}
+		}
+		g.serveEmbeddings(w, r, c, id, principal)
 		return
 	}
 	if r.URL.Path == "/v1/messages/count_tokens" || r.URL.Path == "/messages/count_tokens" {
@@ -327,7 +342,7 @@ func (g *Gateway) countTokens(w http.ResponseWriter, r *http.Request, c *config.
 			errorOut(w, ir.Anthropic, accessErr.Status, accessErr.Code, accessErr.Message, id)
 			return
 		}
-		defer func() { _ = lease.Finish(context.Background(), countUsage, false) }()
+		defer func() { _ = lease.Finish(context.Background(), countUsage, 0, false) }()
 	}
 	headers := map[string]string{}
 	for key, values := range r.Header {
@@ -439,7 +454,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	} else if principal.Anonymous {
 		authSource = "anonymous"
 	}
-	record := observe.Record{ID: id, StartedAt: start, ClientProtocol: clientProtocol, ClientKeyID: principal.ClientID, ClientID: principal.ClientID, ClientName: principal.ClientName, CredentialID: principal.CredentialID, CredentialPrefix: principal.CredentialPrefix, AuthSource: authSource, ConfigVersion: c.Hash}
+	record := observe.Record{ID: id, StartedAt: start, TraceID: traceID(traceparentFromContext(r.Context())), ClientProtocol: clientProtocol, ClientKeyID: principal.ClientID, ClientID: principal.ClientID, ClientName: principal.ClientName, CredentialID: principal.CredentialID, CredentialPrefix: principal.CredentialPrefix, AuthSource: authSource, ConfigVersion: c.Hash}
 	defer func() {
 		if errors.Is(r.Context().Err(), context.Canceled) {
 			record.ErrorCode = "client_cancelled"
@@ -450,8 +465,10 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 			}
 			g.Metrics.Timeouts.Add(1)
 		}
+		record.CostMicros = routeCostMicros(c, record.ProviderID, record.Usage)
+		g.Metrics.CostMicros.Add(uint64(max(0, record.CostMicros)))
 		if clientLease != nil {
-			if err := clientLease.Finish(context.Background(), record.Usage, record.ErrorCode != ""); err != nil {
+			if err := clientLease.Finish(context.Background(), record.Usage, record.CostMicros, record.ErrorCode != ""); err != nil {
 				g.Logger.Error("client usage settlement failed", "request_id", id, "client_id", principal.ClientID, "error", err)
 			}
 		}
@@ -545,6 +562,11 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		}
 	}
 	record.RouteID = decision.RouteID
+	estimatedInput := tokencount.Heuristic{}.Count(canonical).InputTokens
+	requestedOutput := 0
+	if canonical.Sampling.MaxOutputTokens != nil {
+		requestedOutput = *canonical.Sampling.MaxOutputTokens
+	}
 	var upstream *http.Response
 	var target routing.ResolvedTarget
 	var finalErr error
@@ -552,7 +574,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 	var finalBody []byte
 	var streamDecoder *streaming.Decoder
 	var prefetched []streaming.Event
-	for ti, t := range decision.Targets {
+	for ti, t := range g.orderTargets(c, decision.Targets) {
 		finalStatus = 0
 		finalBody = nil
 		finalErr = nil
@@ -561,6 +583,10 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 			g.Metrics.Fallbacks.Add(1)
 		}
 		canonical.Model = t.Model
+		if t.Provider.ContextWindow > 0 && estimatedInput+requestedOutput > t.Provider.ContextWindow {
+			finalErr = fmt.Errorf("%w: provider %q accepts %d tokens, this request needs about %d", errContextWindow, t.Provider.ID, t.Provider.ContextWindow, estimatedInput+requestedOutput)
+			continue
+		}
 		if lossy := strictConversionLoss(c, clientProtocol, t.Provider.Protocol, diagnostics); len(lossy) > 0 {
 			finalErr = lossyConversionError(lossy)
 			continue
@@ -600,33 +626,40 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 			finalErr = lossyConversionError(lossy)
 			continue
 		}
-		for attempt := 1; attempt <= c.Retry.MaxAttempts; attempt++ {
+		// Route-level retry/fallback/timeout replace the global policy when set.
+		retry := effectiveRetry(c, decision.RouteID)
+		provider := t.Provider
+		provider.Timeout = providerTimeout(c, decision.RouteID, provider)
+		for attempt := 1; attempt <= retry.MaxAttempts; attempt++ {
 			aStart := time.Now()
-			upstream, e = g.do(r.Context(), t.Provider, payload, canonical.Stream, t.Model)
+			upstream, e = g.do(r.Context(), provider, payload, canonical.Stream, t.Model)
 			a := observe.Attempt{Number: attempt, ProviderID: t.Provider.ID, Model: t.Model, DurationMS: time.Since(aStart).Milliseconds()}
 			if e != nil {
 				a.Error = e.Error()
 				record.Attempts = append(record.Attempts, a)
 				finalErr = e
+				g.noteProviderResult(c, t.Provider.ID, false)
 			} else {
 				a.Status = upstream.StatusCode
 				record.Attempts = append(record.Attempts, a)
 				if upstream.StatusCode >= 200 && upstream.StatusCode < 300 {
+					g.noteProviderResult(c, t.Provider.ID, true)
 					finalErr = nil
 					break
 				}
+				g.noteProviderResult(c, t.Provider.ID, false)
 				errBody, _ := io.ReadAll(io.LimitReader(upstream.Body, 1<<20))
 				upstream.Body.Close()
 				finalErr = fmt.Errorf("upstream returned %d: %s", upstream.StatusCode, redactSnippet(errBody))
 				finalStatus = upstream.StatusCode
 				finalBody = errBody
-				if !retryStatus(c.Retry.OnStatus, upstream.StatusCode) {
+				if !retryStatus(retry.OnStatus, upstream.StatusCode) {
 					break
 				}
 			}
-			if attempt < c.Retry.MaxAttempts {
+			if attempt < retry.MaxAttempts {
 				g.Metrics.Retries.Add(1)
-				if !sleepContext(r.Context(), backoff(c.Retry, attempt, upstream)) {
+				if !sleepContext(r.Context(), backoff(retry, attempt, upstream)) {
 					finalErr = r.Context().Err()
 					break
 				}
@@ -665,7 +698,7 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		if finalErr == nil {
 			break
 		}
-		if ti+1 < len(decision.Targets) && !fallbackAllowed(c.Fallback, finalStatus, finalBody, finalErr) {
+		if ti+1 < len(decision.Targets) && !fallbackAllowed(effectiveFallback(c, decision.RouteID), finalStatus, finalBody, finalErr) {
 			break
 		}
 	}
@@ -677,6 +710,13 @@ func (g *Gateway) handle(w http.ResponseWriter, r *http.Request, c *config.Confi
 		}
 		if c.Logging.CaptureBodies && len(finalBody) > 0 {
 			record.ResponseBody = string(finalBody)
+		}
+		if errors.Is(finalErr, errContextWindow) {
+			record.Status = http.StatusRequestEntityTooLarge
+			record.ErrorCode = "context_window_exceeded"
+			g.Metrics.Errors.Add(1)
+			errorOut(w, clientProtocol, http.StatusRequestEntityTooLarge, "invalid_request", finalErr.Error(), id)
+			return
 		}
 		if errors.Is(finalErr, errLossyConversion) {
 			record.Status = 422
@@ -868,6 +908,7 @@ func (g *Gateway) serveMetrics(w http.ResponseWriter) {
 	w.Header().Set("content-type", "text/plain; version=0.0.4")
 	inputTokens, outputTokens := g.Metrics.InputTokens.Load(), g.Metrics.OutputTokens.Load()
 	fmt.Fprintf(w, "airoute_requests_total %d\nairoute_errors_total %d\nairoute_inflight %d\nairoute_retries_total %d\nairoute_fallbacks_total %d\nairoute_timeouts_total %d\nairoute_cancellations_total %d\nairoute_conversion_diagnostics_total %d\nairoute_input_tokens_total %d\nairoute_output_tokens_total %d\nairoute_tokens_total %d\n", g.Metrics.Requests.Load(), g.Metrics.Errors.Load(), g.Metrics.InFlight.Load(), g.Metrics.Retries.Load(), g.Metrics.Fallbacks.Load(), g.Metrics.Timeouts.Load(), g.Metrics.Cancellations.Load(), g.Metrics.Diagnostics.Load(), inputTokens, outputTokens, inputTokens+outputTokens)
+	fmt.Fprintf(w, "airoute_cost_micros_total %d\n", g.Metrics.CostMicros.Load())
 	fmt.Fprintf(w, "airoute_request_duration_milliseconds_sum %d\nairoute_request_duration_milliseconds_count %d\nairoute_first_token_milliseconds_sum %d\n", g.Metrics.LatencyMSTotal.Load(), g.Metrics.Completed.Load(), g.Metrics.FirstTokenMSTotal.Load())
 	for i, bound := range observe.HistogramBounds {
 		fmt.Fprintf(w, "airoute_request_duration_milliseconds_bucket{le=%q} %d\nairoute_first_token_milliseconds_bucket{le=%q} %d\n", fmt.Sprint(bound), g.Metrics.LatencyBuckets[i].Load(), fmt.Sprint(bound), g.Metrics.FirstTokenBuckets[i].Load())

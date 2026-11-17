@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/soooooollee/ai-router/internal/protocol/ir"
 )
@@ -255,5 +256,113 @@ func TestUnreachableDuplicateRouteRejected(t *testing.T) {
 	}}
 	if err := c.prepare(); err == nil {
 		t.Fatal("unreachable duplicate route was accepted")
+	}
+}
+
+func TestPricingCostMicros(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		pricing Pricing
+		usage   ir.Usage
+		want    int64
+	}{
+		{"unpriced provider costs nothing", Pricing{}, ir.Usage{InputTokens: 1000, OutputTokens: 1000}, 0},
+		{"input and output at list price", Pricing{InputPerMillion: 0.4, OutputPerMillion: 1.6}, ir.Usage{InputTokens: 1_000_000, OutputTokens: 500_000}, 1_200_000},
+		// OpenAI reports prompt_tokens including cache hits.
+		{"cached tokens are a subset of input", Pricing{InputPerMillion: 1, OutputPerMillion: 2, CachedPerMillion: 0.1}, ir.Usage{InputTokens: 1000, CachedTokens: 400, OutputTokens: 0}, 640},
+		// Anthropic reports cache reads outside input_tokens.
+		{"cached tokens beyond input are billed additionally", Pricing{InputPerMillion: 1, OutputPerMillion: 2, CachedPerMillion: 0.1}, ir.Usage{InputTokens: 100, CachedTokens: 400, OutputTokens: 0}, 130},
+		{"cached rate falls back to input rate", Pricing{InputPerMillion: 1}, ir.Usage{InputTokens: 1000, CachedTokens: 1000}, 1000},
+	} {
+		if got := tc.pricing.CostMicros(tc.usage); got != tc.want {
+			t.Fatalf("%s: got %d micro-dollars, want %d", tc.name, got, tc.want)
+		}
+	}
+}
+
+func TestRouteOverridesAndFailoverAreParsed(t *testing.T) {
+	t.Setenv("ROUTE_OVERRIDE_KEY", "k")
+	dir := t.TempDir()
+	path := filepath.Join(dir, "airoute.yaml")
+	raw := `version: 1
+providers:
+  - id: p1
+    protocol: openai-chat
+    base_url: https://example.com/v1
+    api_key: ${ROUTE_OVERRIDE_KEY}
+    models: [m1]
+routes:
+  - id: fast
+    priority: 1
+    match: {model: fast}
+    targets: [{provider: p1, model: m1}]
+    timeout: 20s
+    retry:
+      max_attempts: 4
+      base_delay: 200ms
+    fallback:
+      on_status: [500, 502]
+failover:
+  strategy: health
+  breaker:
+    failure_threshold: 5
+    cooldown: 45s
+`
+	if err := os.WriteFile(path, []byte(raw), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	route := c.Routes[0]
+	if route.Timeout != 20*time.Second || route.Retry == nil || route.Retry.MaxAttempts != 4 || route.Retry.BaseDelay != 200*time.Millisecond {
+		t.Fatalf("route overrides were not parsed: %#v", route)
+	}
+	// Unset retry fields inherit the global policy.
+	if route.Retry.MaxDelay != c.Retry.MaxDelay || len(route.Retry.OnStatus) == 0 {
+		t.Fatalf("route retry defaults were not inherited: %#v", route.Retry)
+	}
+	if c.Failover.Strategy != "health" || c.Failover.Breaker.FailureThreshold != 5 || c.Failover.Breaker.Cooldown != 45*time.Second {
+		t.Fatalf("failover section was not parsed: %#v", c.Failover)
+	}
+	if len(route.Fallback.OnStatus) != 2 {
+		t.Fatalf("route fallback was not parsed: %#v", route.Fallback)
+	}
+}
+
+func TestFailoverDefaultsToOrdered(t *testing.T) {
+	c := &Config{Version: 1, Server: Server{Listen: "127.0.0.1:12666", AdminListen: "127.0.0.1:12667"}, Conversion: Conversion{UnsupportedFields: "warn", RemoteImagePolicy: "pass-through"}}
+	if err := c.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	if c.Failover.Strategy != "ordered" || c.Failover.Breaker.FailureThreshold != 3 || c.Failover.Breaker.Cooldown != 30*time.Second {
+		t.Fatalf("failover defaults are unexpected: %#v", c.Failover)
+	}
+}
+
+func TestByteSizeParsesUnitsDeterministically(t *testing.T) {
+	for _, tc := range []struct {
+		value string
+		want  int64
+	}{
+		{"32MiB", 32 << 20},
+		{"1GiB", 1 << 30},
+		{"512KiB", 512 << 10},
+		{"512B", 512},
+		{"1048576", 1048576},
+	} {
+		for attempt := 0; attempt < 20; attempt++ {
+			got, err := bytesize(tc.value, 0)
+			if err != nil || got != tc.want {
+				t.Fatalf("bytesize(%q) = %d, %v; want %d", tc.value, got, err, tc.want)
+			}
+		}
+	}
+	if _, err := bytesize("32Mi", 0); err == nil {
+		t.Fatal("invalid unit was accepted")
+	}
+	if got, err := bytesize("", 42); err != nil || got != 42 {
+		t.Fatalf("empty value did not use the default: %d %v", got, err)
 	}
 }

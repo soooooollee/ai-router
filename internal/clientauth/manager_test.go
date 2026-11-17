@@ -170,7 +170,7 @@ func TestManagerExpiresCredentialAndDoesNotEstimateFailedRequests(t *testing.T) 
 	if accessErr != nil {
 		t.Fatal(accessErr)
 	}
-	if err = lease.Finish(context.Background(), ir.Usage{}, true); err != nil {
+	if err = lease.Finish(context.Background(), ir.Usage{}, 0, true); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := manager.Store.GetUsage(context.Background(), principal.Scope(), principal.ClientID, clientstore.UsageQuery{})
@@ -214,7 +214,7 @@ func TestManagerPolicyPrecheckAndRequestLease(t *testing.T) {
 	if _, secondErr := manager.BeginRequest(context.Background(), principal, request, "req_2"); secondErr == nil || secondErr.Code != "concurrency_limited" {
 		t.Fatalf("concurrency policy was not enforced: %v", secondErr)
 	}
-	if err := lease.Finish(context.Background(), ir.Usage{InputTokens: 7, OutputTokens: 9}, false); err != nil {
+	if err := lease.Finish(context.Background(), ir.Usage{InputTokens: 7, OutputTokens: 9}, 0, false); err != nil {
 		t.Fatal(err)
 	}
 	usage, err := manager.Store.GetUsage(context.Background(), principal.Scope(), principal.ClientID, clientstore.UsageQuery{})
@@ -305,5 +305,28 @@ func TestManagerAuditsSystemClockRollback(t *testing.T) {
 	events, err := manager.Store.ListAudit(context.Background(), principal.Scope(), clientstore.AuditFilter{ClientID: principal.ClientID})
 	if err != nil || len(events) == 0 || events[0].Action != "system.clock_rollback_detected" {
 		t.Fatalf("clock rollback was not audited: %#v %v", events, err)
+	}
+}
+
+func TestToolRoundLimitStopsRunawayConversation(t *testing.T) {
+	manager, cfg, secret := testManager(t, clientstore.ClientPolicy{MaxToolRounds: 2})
+	principal, accessErr := manager.Authenticate(authenticatedRequest(secret), cfg)
+	if accessErr != nil {
+		t.Fatalf("authenticate: %v", accessErr)
+	}
+	toolTurn := ir.Message{Role: "assistant", Content: []ir.ContentBlock{{Type: "tool_call", ID: "c", Name: "lookup", Arguments: []byte(`{}`)}}}
+	request := &ir.Request{Model: "m", Messages: []ir.Message{
+		{Role: "user", Content: []ir.ContentBlock{{Type: "text", Text: "go"}}},
+		toolTurn, toolTurn, toolTurn,
+	}}
+	lease, accessErr := manager.BeginRequest(context.Background(), principal, request, "req_tools")
+	if accessErr == nil || accessErr.Code != "tool_rounds_exceeded" {
+		t.Fatalf("runaway tool loop was not rejected: %#v", accessErr)
+	}
+	if lease != nil {
+		t.Fatal("rejected request returned a lease")
+	}
+	if _, err := manager.BeginRequest(context.Background(), principal, &ir.Request{Model: "m", Messages: []ir.Message{toolTurn, toolTurn}}, "req_ok"); err != nil {
+		t.Fatalf("request within the tool round limit was rejected: %v", err)
 	}
 }

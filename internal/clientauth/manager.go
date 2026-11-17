@@ -259,6 +259,27 @@ func sourceAllowed(remoteAddr string, cidrs []string) bool {
 	return false
 }
 
+// toolRounds counts completed assistant tool-calling turns. An agent loop shows
+// up here as a growing number of them, which is what the policy cap is for.
+func toolRounds(request *ir.Request) int {
+	if request == nil {
+		return 0
+	}
+	rounds := 0
+	for _, message := range request.Messages {
+		if message.Role != "assistant" {
+			continue
+		}
+		for _, block := range message.Content {
+			if block.Type == "tool_call" {
+				rounds++
+				break
+			}
+		}
+	}
+	return rounds
+}
+
 func modelAllowed(model string, allowed []string) bool {
 	if len(allowed) == 0 {
 		return true
@@ -301,6 +322,12 @@ func (m *Manager) BeginRequest(ctx context.Context, principal Principal, request
 		m.reject(ctx, principal)
 		return nil, &AccessError{Status: http.StatusForbidden, Code: "max_output_tokens_exceeded", Message: "requested output token limit exceeds client policy"}
 	}
+	if policy.MaxToolRounds > 0 {
+		if rounds := toolRounds(request); rounds > policy.MaxToolRounds {
+			m.reject(ctx, principal)
+			return nil, &AccessError{Status: http.StatusForbidden, Code: "tool_rounds_exceeded", Message: "conversation exceeded the client tool round limit"}
+		}
+	}
 	release, ok := m.Limiter.Acquire(principal.ClientID, policy.MaxConcurrent)
 	if !ok {
 		m.reject(ctx, principal)
@@ -330,7 +357,7 @@ func (m *Manager) BeginRequest(ctx context.Context, principal Principal, request
 	return lease, nil
 }
 
-func (l *RequestLease) Finish(ctx context.Context, usage ir.Usage, requestFailed bool) error {
+func (l *RequestLease) Finish(ctx context.Context, usage ir.Usage, costMicros int64, requestFailed bool) error {
 	if l == nil {
 		return nil
 	}
@@ -349,7 +376,8 @@ func (l *RequestLease) Finish(ctx context.Context, usage ir.Usage, requestFailed
 		output = 0
 	}
 	return l.manager.Store.SettleUsage(ctx, l.principal.Scope(), clientstore.UsageDelta{
-		RequestID: l.requestID, InputTokens: input, OutputTokens: output, Error: requestFailed, Estimated: estimated,
+		RequestID: l.requestID, InputTokens: input, OutputTokens: output, CostMicros: costMicros,
+		Error: requestFailed, Estimated: estimated,
 	})
 }
 

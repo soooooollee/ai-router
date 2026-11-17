@@ -16,12 +16,13 @@ import (
 	bolt "go.etcd.io/bbolt"
 )
 
+// Version 7 adds per-day spend tracking (cost_micros) to usage buckets.
 // Version 2 adds recoverable managed credentials. Version 5 removes every
 // credential using the retired air_sk_* format. Version 6 removes the briefly
 // introduced automatic Default credential; access keys are user-created.
 // Older binaries must refuse to open the database because rewriting a
 // credential could otherwise discard newer state fields.
-const schemaVersion = 6
+const schemaVersion = 7
 
 var (
 	bucketMeta               = []byte("meta")

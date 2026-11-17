@@ -2,6 +2,7 @@ package clientstore
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
@@ -96,5 +97,59 @@ func TestBoltStorePrunesUsageOnWritePath(t *testing.T) {
 	}
 	if !minuteUsageExists(t, store, client, now.Add(-48*time.Hour).Add(time.Minute)) {
 		t.Fatal("retention ran again inside the throttle window")
+	}
+}
+
+func TestBoltStoreTracksSpendAndEnforcesDailyCap(t *testing.T) {
+	store := testStore(t)
+	now := time.Now()
+	policy := ClientPolicy{ID: "spend-policy", DailyCostLimitMicros: 1_000}
+	settle := func(requestID string, costMicros int64) error {
+		if err := store.ReserveUsage(context.Background(), DefaultScope, UsageReservation{
+			RequestID: requestID, ClientID: "spend-client", Day: now, InputTokens: 1, OutputTokens: 1,
+		}, policy); err != nil {
+			return err
+		}
+		return store.SettleUsage(context.Background(), DefaultScope, UsageDelta{
+			RequestID: requestID, InputTokens: 1, OutputTokens: 1, CostMicros: costMicros,
+		})
+	}
+	if err := settle("req-1", 600); err != nil {
+		t.Fatalf("first request: %v", err)
+	}
+	if err := settle("req-2", 400); err != nil {
+		t.Fatalf("second request: %v", err)
+	}
+	// The cap is enforced before the next request starts.
+	if err := settle("req-3", 100); !errors.Is(err, ErrQuotaExhausted) {
+		t.Fatalf("overspending was not rejected: %v", err)
+	}
+	summary, err := store.GetUsage(context.Background(), DefaultScope, "spend-client", UsageQuery{From: now.Add(-time.Hour), To: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if summary.Total.CostMicros != 1_000 {
+		t.Fatalf("total spend = %d, want 1000", summary.Total.CostMicros)
+	}
+	if len(summary.Daily) != 1 || summary.Daily[0].CostMicros != 1_000 {
+		t.Fatalf("daily spend was not accumulated: %#v", summary.Daily)
+	}
+}
+
+func TestBoltStoreWithoutCostLimitNeverBlocks(t *testing.T) {
+	store := testStore(t)
+	now := time.Now()
+	if err := store.ReserveUsage(context.Background(), DefaultScope, UsageReservation{
+		RequestID: "free", ClientID: "free-client", Day: now,
+	}, ClientPolicy{ID: "free"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.SettleUsage(context.Background(), DefaultScope, UsageDelta{RequestID: "free", CostMicros: 5_000_000}); err != nil {
+		t.Fatal(err)
+	}
+	if err := store.ReserveUsage(context.Background(), DefaultScope, UsageReservation{
+		RequestID: "free-2", ClientID: "free-client", Day: now,
+	}, ClientPolicy{ID: "free"}); err != nil {
+		t.Fatalf("unpriced policy must not enforce a cap: %v", err)
 	}
 }

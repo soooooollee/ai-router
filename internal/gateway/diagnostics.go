@@ -13,6 +13,10 @@ import (
 
 var errLossyConversion = errors.New("request requires a lossy protocol conversion")
 
+// errContextWindow marks a request that exceeds the provider window; the target
+// is skipped so a larger-window fallback can still serve it.
+var errContextWindow = errors.New("request exceeds the provider context window")
+
 // strictConversionLoss reports the diagnostics that make a conversion
 // unacceptable under conversion.unsupported_fields: strict. Native
 // (same-protocol) conversions are always allowed, and information can be lost

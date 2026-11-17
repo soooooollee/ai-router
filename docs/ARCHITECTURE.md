@@ -82,6 +82,8 @@
 
 - **target 内重试**：`retry.max_attempts`，仅当状态码命中 `retry.on_status` 时继续，退避支持 `Retry-After`（秒与 HTTP-date）与指数抖动。
 - **target 间 fallback**：由 `fallbackAllowed` 决定，默认 429/500/502/503/504；`context.Canceled` 永不 fallback。
+- **路由级覆盖**：`routes[].retry` / `routes[].fallback` / `routes[].timeout` 一旦设置就**整体替换**全局策略（不做字段合并），`timeout` 与 provider 超时取较小值。解析结果见 `effectiveRetry` / `effectiveFallback` / `providerTimeout`（`internal/gateway/failover.go`）。
+- **熔断与健康排序**：`failover.strategy: health` 时，连续失败达到 `failover.breaker.failure_threshold` 的 provider 会在 `cooldown` 内被排到 target 列表末尾（不删除，全部不健康时仍按原序遍历）。默认 `ordered`，即完全不改变既有行为。
 - **流式的提交点是首个事件**：先预读首个事件并试解码，失败仍可换 target；一旦已向客户端发出事件，后续失败只补一条 `error` 事件，不再重试。
 
 ### 流式
@@ -91,6 +93,15 @@
 首事件之前失败仍可换 target；**首事件之后失败**一律走 `failStream`：给客户端补一条 `error` 事件，并把该请求记为 502。HTTP 状态码此时已经发出、无法改写，但日志/指标不会再把截断的流算成 200 成功。
 
 客户端侧的编码通过 `protocol.NewStreamEncoder(adapter)` 取得：需要逐响应状态的协议实现 `StreamEncoder`（目前只有 Gemini——它只能接受参数完整的 functionCall，必须把 `arguments.delta` 缓冲到 `content.end`），其余协议用无状态实现。gateway 因此不再包含任何协议特例。
+
+### 非对话端点
+
+- `/v1/embeddings`（OpenAI 形状）：不带会话历史，**不经过 IR**。请求按 `match.model` 路由后直接改写为目标 provider 的形状——OpenAI 兼容 provider 走 `{base}/embeddings`；Gemini 单条走 `:embedContent`、批量走 `:batchEmbedContents`，响应再归一化成 OpenAI 的 `{"object":"list","data":[...]}`。Anthropic 没有 embeddings 端点，命中时返回 400 并说明原因，而不是让请求失败在上游。
+- `/v1/messages/count_tokens`：优先透传 Anthropic 原生计数，失败回退本地启发式（见 §5 的 `tokencount`）。
+
+### 追踪
+
+每个请求都会得到一个 W3C `traceparent`：客户端传入合法值就沿用，否则生成新的。它会被转发给上游、以 `x-airoute-trace-id` 回显、并写入请求记录（`trace_id`）。这样网关的日志、上游日志和调用方自己的 APM 能对上同一条链。
 
 ## 5. 协议层与 IR
 
@@ -134,7 +145,11 @@ IR 要点：
 - `clientstore`（bbolt，schema v6）：`clients`、`credentials`、`credential_by_hmac`、`policies`、`usage_daily`、`usage_minute`、`usage_reservations`、`audit_events`；键前缀为 `tenant\0project\0id`。
 - 凭据：`sk-` + 32 字节随机，库内只存 HMAC-SHA256 与 15 位前缀；明文只在生成响应里出现一次。`managed` 类型额外用 AES-256-GCM 保存密文，可重复下发。
 - 主密钥：`credential-master.key`（32 字节，`{version,id,key}`），可用 `AIROUTE_CREDENTIAL_MASTER_KEY` 外置，支持多代轮换。
-- 配额：`Precheck`（RPM/burst、协议、CIDR）→ `BeginRequest`（模型、并发、日配额预留）→ `Finish`（释放并发、按真实用量结算）。
+- 配额：`Precheck`（RPM/burst、协议、CIDR）→ `BeginRequest`（模型、并发、日配额预留、工具轮次上限）→ `Finish`（释放并发、按真实用量结算）。
+- 成本：`providers[].pricing`（每百万 token 的输入/输出/缓存价）决定单价；结算时换算成**整数微美元**写进 `usage_daily`/`usage_minute` 的 `cost_micros`，并在 `/metrics` 暴露 `airoute_cost_micros_total`。缓存 token 的计费口径见 `config.Pricing.CostMicros`（OpenAI 的 `prompt_tokens` 含缓存命中，Anthropic 的缓存读取单列）。
+- 预算：`ClientPolicy.DailyCostLimitMicros` 是**软上限**——在请求开始时检查当天已结算金额，超过即拒绝；单个在途请求可能小幅超支，下一次请求会被挡住。
+- 工具循环防护：`ClientPolicy.MaxToolRounds` 限制历史里已完成的「assistant 工具调用轮次」，超过直接 403 `tool_rounds_exceeded`。
+- 体积字段（`server.max_body_size`）按最长后缀优先解析，`32MiB`/`1GiB` 不会被误读成裸字节单位。
 - 限流桶：内存令牌桶，`req/s` 级精度；桶数量超过 256 时顺手淘汰「已完整回填且静默 10 分钟以上」的桶，因此长期运行不会按客户端数量无限增长，且淘汰不会改变任何判定。桶仍是单进程内存态，重启清零。
 - 鉴权关闭（`auth.enabled: false`）时所有请求都是匿名 principal，**不检查也不消耗上述任何策略与配额**；`air serve` 启动时会打印 warning。
 - 用量保留：`usage_minute` 只保留 24 小时，由 `PruneUsage` 清理；写入路径每小时最多触发一次（启动时也会跑一遍）。`usage_daily` 是长周期记录，不清理。
@@ -170,6 +185,7 @@ IR 要点：
 - 校验四层：环境变量引用要求（敏感字段必须是 `${ENV}`）、嵌入的 JSON Schema（`additionalProperties:false`）、`KnownFields(true)`、语义校验（端口冲突、id 唯一、target 引用存在、公网监听需 ≥24 位 admin token），错误用 `errors.Join` 一次返回。
 - 热重载：2 秒轮询文件 hash；加载失败保留旧快照并记录错误；SIGHUP 也可触发。
 - `config.CompareEffects` 把字段变更分为 `hot_reloaded` / `runtime_rebuilt` / `restart_required` 三类，供控制台提示。
+- 本轮新增的配置面：`providers[].pricing`（`input_per_million` / `output_per_million` / `cached_per_million`，单位美元/百万 token）、`providers[].context_window`（超出时本地 413，并跳过该 target 让更大窗口的 fallback 接手）、`routes[].retry|fallback|timeout`（见 §4）、`failover.strategy|breaker`（见 §4）。全部字段都在 `schemas/config.v1.schema.json` 内，`additionalProperties: false` 依然生效。
 - 写入链路（`PUT /api/config`）：`expected_hash` 乐观锁 → 脱敏掩码回填 → 临时文件 → 重新校验 → 备份 `.bak` → 原子替换 → 失败自动回滚 → 应用运行时 → 保留最近 10 份备份。
 
 ## 10. 控制面与前端
@@ -208,15 +224,20 @@ IR 要点：
 - `GET /api/config` 明文返回密钥；现在无条件脱敏，且拒绝无法回填的掩码（见 §10）。
 - 升级检查指向分叉上游；现在可用 `AIROUTE_RELEASE_REPO` 指定发布仓库。
 - `go.mod` 与 CI 的 Go 版本口径已在 `go.mod` 注释、CONTRIBUTING 与本文中说明：`go` 指令是最低语言版本，CI/发行构建固定较新补丁版。
+- 成本与预算：provider 定价、`usage_*` 的 `cost_micros`、客户端每日消费上限与 `airoute_cost_micros_total` 已落地（见 §7），控制台展示待补。
+- 健康感知路由与熔断、路由级 retry/fallback/timeout 已实现（见 §4），默认 `ordered` 不改变既有行为。
+- 工具轮次上限、上下文窗口校验、`/v1/embeddings`、`traceparent` 透传与 `x-airoute-trace-id` 已实现（见 §4/§7）。
 
 ### 未修复（已知设计取舍）
 
 | 问题 | 位置 | 影响 |
 |---|---|---|
-| 限流与配额是单进程内存态 | `internal/ratelimit/limiter.go` | 重启清零、多实例之间不共享；水平扩容需要在入口层再做限流 |
+| 限流、熔断、配额都是单进程内存态 | `internal/ratelimit`、`internal/gateway/failover.go` | 重启清零、多实例之间不共享；水平扩容需要在入口层再做限流与熔断 |
+| 多租户只有数据模型 | `clientstore.Scope` | `tenant`/`project` 字段已贯穿存储与审计，但没有租户管理 API/UI，全部固定为 default |
+| 控制台不展示消耗 | `web/src/pages/ClientsPage` | 费用通过 `/api/clients/{id}/usage`、客户端列表的 `today.cost_micros` 与 Prometheus 暴露，但页面还没渲染；本机 Node 工具链不可用，`webdist` 需在有 Node 的环境执行 `npm run build` 后提交 |
 | `gateway.go` 仍有 888 行 | `internal/gateway/gateway.go` | 入口 + `handle` 主流程内聚；再拆会切断请求生命周期的可读性，暂不继续 |
 
-## 13. 常见排障
+## 13. 常见排障## 13. 常见排障
 
 ```bash
 air check                 # 配置是否合法

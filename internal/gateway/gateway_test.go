@@ -1439,3 +1439,390 @@ func TestStreamFailureEmitsErrorEventAndRecordsFailure(t *testing.T) {
 		t.Fatalf("failed stream was recorded as status %d", records[0].Status)
 	}
 }
+
+func TestHealthStrategyTriesDegradedProviderLast(t *testing.T) {
+	var failingHits, backupHits atomic.Int64
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		failingHits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"boom"}`)
+	}))
+	defer failing.Close()
+	backup := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		backupHits.Add(1)
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer backup.Close()
+	c := testConfig(failing.URL, ir.OpenAIChat)
+	c.Providers = append(c.Providers, config.Provider{ID: "backup", Protocol: ir.OpenAIChat, BaseURL: backup.URL, APIKey: "x", Models: []string{"upstream-model"}, Timeout: time.Second, AllowPrivateURL: true})
+	c.DefaultRoute.Targets = append(c.DefaultRoute.Targets, config.RouteTarget{Provider: "backup", Model: "upstream-model"})
+	c.Retry.MaxAttempts = 1
+	c.Failover = config.Failover{Strategy: "health", Breaker: config.Breaker{FailureThreshold: 1, Cooldown: time.Hour}}
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	post := func() *http.Response {
+		_, body := clientRequest(ir.OpenAIChat, false)
+		resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, _ = io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+		return resp
+	}
+	first := post()
+	if first.StatusCode != http.StatusOK || first.Header.Get("x-airoute-provider-id") != "backup" {
+		t.Fatalf("first request did not fall back to the backup provider: %d %s", first.StatusCode, first.Header.Get("x-airoute-provider-id"))
+	}
+	if failingHits.Load() != 1 || backupHits.Load() != 1 {
+		t.Fatalf("unexpected attempt counts after first request: failing=%d backup=%d", failingHits.Load(), backupHits.Load())
+	}
+	// The failing provider's breaker is open, so it must be tried last now.
+	second := post()
+	if second.StatusCode != http.StatusOK || second.Header.Get("x-airoute-provider-id") != "backup" {
+		t.Fatalf("degraded provider was not demoted: %d %s", second.StatusCode, second.Header.Get("x-airoute-provider-id"))
+	}
+	if failingHits.Load() != 1 {
+		t.Fatalf("degraded provider was still tried first: hits=%d", failingHits.Load())
+	}
+}
+
+func TestRouteRetryOverridesGlobalPolicy(t *testing.T) {
+	var hits atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		hits.Add(1)
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = io.WriteString(w, `{"error":"boom"}`)
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL, ir.OpenAIChat)
+	c.Retry = config.Retry{MaxAttempts: 1, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, OnStatus: []int{500}}
+	c.Routes = []config.Route{{
+		ID: "retrying", Priority: 1, Match: config.RouteMatch{Model: "alias"},
+		Targets: []config.RouteTarget{{Provider: "target", Model: "upstream-model"}},
+		Retry:   &config.Retry{MaxAttempts: 3, BaseDelay: time.Millisecond, MaxDelay: time.Millisecond, OnStatus: []int{500}},
+	}}
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	_, body := clientRequest(ir.OpenAIChat, false)
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if hits.Load() != 3 {
+		t.Fatalf("route retry policy was not used: attempts=%d", hits.Load())
+	}
+	if resp.StatusCode < 500 {
+		t.Fatalf("failed upstream was reported as %d", resp.StatusCode)
+	}
+}
+
+func TestRouteTimeoutCapsProviderTimeout(t *testing.T) {
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		time.Sleep(250 * time.Millisecond)
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer slow.Close()
+	c := testConfig(slow.URL, ir.OpenAIChat) // provider timeout is 2s
+	c.Retry.MaxAttempts = 1
+	c.Routes = []config.Route{{
+		ID: "short", Priority: 1, Match: config.RouteMatch{Model: "alias"},
+		Targets: []config.RouteTarget{{Provider: "target", Model: "upstream-model"}},
+		Timeout: 40 * time.Millisecond,
+	}}
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	_, body := clientRequest(ir.OpenAIChat, false)
+	started := time.Now()
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode < 500 {
+		t.Fatalf("route timeout did not abort the request: status=%d", resp.StatusCode)
+	}
+	if elapsed := time.Since(started); elapsed > 2*time.Second {
+		t.Fatalf("route timeout was not applied: %s", elapsed)
+	}
+}
+
+func TestPricedProviderRecordsSpend(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{"id":"r1","model":"upstream-model","choices":[{"message":{"role":"assistant","content":"hi"},"finish_reason":"stop"}],"usage":{"prompt_tokens":1000,"completion_tokens":500,"total_tokens":1500}}`))
+	}))
+	defer upstream.Close()
+	logs := observe.NewStore(10)
+	c := testConfig(upstream.URL, ir.OpenAIChat)
+	c.Providers[0].Pricing = config.Pricing{InputPerMillion: 0.4, OutputPerMillion: 1.6}
+	c.Metrics.Enabled = true
+	g := gateway.New(config.NewStore(c), testRegistry(), logs, &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	_, body := clientRequest(ir.OpenAIChat, false)
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	records := logs.List(1)
+	if len(records) != 1 {
+		t.Fatalf("expected one record, got %#v", records)
+	}
+	// 1000 input tokens * 0.4 + 500 output tokens * 1.6 = 1200 micro-dollars.
+	if records[0].CostMicros != 1200 {
+		t.Fatalf("recorded spend = %d micro-dollars, want 1200", records[0].CostMicros)
+	}
+	metrics, err := http.Get(server.URL + "/metrics")
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(metrics.Body)
+	metrics.Body.Close()
+	if !strings.Contains(string(raw), "airoute_cost_micros_total 1200") {
+		t.Fatalf("spend metric missing: %s", raw)
+	}
+}
+
+func TestContextWindowRejectsOversizedRequest(t *testing.T) {
+	var smallHits, largeHits atomic.Int64
+	small := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		smallHits.Add(1)
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer small.Close()
+	large := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		largeHits.Add(1)
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer large.Close()
+	c := testConfig(small.URL, ir.OpenAIChat)
+	c.Providers[0].ContextWindow = 8
+	c.Providers = append(c.Providers, config.Provider{ID: "wide", Protocol: ir.OpenAIChat, BaseURL: large.URL, APIKey: "x", Models: []string{"upstream-model"}, Timeout: time.Second, AllowPrivateURL: true, ContextWindow: 1_000_000})
+	c.DefaultRoute.Targets = append(c.DefaultRoute.Targets, config.RouteTarget{Provider: "wide", Model: "upstream-model"})
+	c.Retry.MaxAttempts = 1
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	body := `{"model":"alias","messages":[{"role":"user","content":"` + strings.Repeat("token ", 200) + `"}]}`
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	// The narrow provider is skipped before any request reaches it.
+	if smallHits.Load() != 0 {
+		t.Fatalf("oversized request was sent to a provider with a small window: hits=%d", smallHits.Load())
+	}
+	if resp.StatusCode != http.StatusOK || largeHits.Load() != 1 {
+		t.Fatalf("oversized request did not fail over to the wider provider: status=%d hits=%d", resp.StatusCode, largeHits.Load())
+	}
+}
+
+func TestContextWindowRejectionIsExplicitWhenNoTargetFits(t *testing.T) {
+	narrow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer narrow.Close()
+	c := testConfig(narrow.URL, ir.OpenAIChat)
+	c.Providers[0].ContextWindow = 8
+	c.Retry.MaxAttempts = 1
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	body := `{"model":"alias","messages":[{"role":"user","content":"` + strings.Repeat("token ", 200) + `"}]}`
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusRequestEntityTooLarge || !strings.Contains(string(raw), "context window") {
+		t.Fatalf("context window rejection was not explicit: %d %s", resp.StatusCode, raw)
+	}
+}
+
+func TestTraceparentIsPropagatedAndEchoed(t *testing.T) {
+	var seen atomic.Value
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		seen.Store(r.Header.Get("traceparent"))
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer upstream.Close()
+	logs := observe.NewStore(10)
+	c := testConfig(upstream.URL, ir.OpenAIChat)
+	g := gateway.New(config.NewStore(c), testRegistry(), logs, &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	const inbound = "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01"
+	_, body := clientRequest(ir.OpenAIChat, false)
+	req, _ := http.NewRequest(http.MethodPost, server.URL+"/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("content-type", "application/json")
+	req.Header.Set("traceparent", inbound)
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	if got, _ := seen.Load().(string); got != inbound {
+		t.Fatalf("upstream saw traceparent %q, want %q", got, inbound)
+	}
+	if got := resp.Header.Get("x-airoute-trace-id"); got != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("trace id was not echoed: %q", got)
+	}
+	records := logs.List(1)
+	if len(records) != 1 || records[0].TraceID != "4bf92f3577b34da6a3ce929d0e0e4736" {
+		t.Fatalf("trace id was not recorded: %#v", records)
+	}
+}
+
+func TestTraceparentIsGeneratedWhenAbsent(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write(responseFor(ir.OpenAIChat))
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL, ir.OpenAIChat)
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	_, body := clientRequest(ir.OpenAIChat, false)
+	resp, err := http.Post(server.URL+"/v1/chat/completions", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, _ = io.Copy(io.Discard, resp.Body)
+	resp.Body.Close()
+	id := resp.Header.Get("x-airoute-trace-id")
+	if len(id) != 32 || strings.Trim(id, "0") == "" {
+		t.Fatalf("generated trace id is invalid: %q", id)
+	}
+}
+
+func TestEmbeddingsProxyRewritesModelForOpenAIProviders(t *testing.T) {
+	var received struct {
+		path  string
+		model string
+		auth  string
+	}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var payload map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&payload)
+		received.path = r.URL.Path
+		received.model, _ = payload["model"].(string)
+		received.auth = r.Header.Get("authorization")
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"object":"list","data":[{"object":"embedding","index":0,"embedding":[0.1,0.2]}],"model":"upstream-embed","usage":{"prompt_tokens":2,"total_tokens":2}}`)
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL, ir.OpenAIChat)
+	c.Providers[0].Models = []string{"upstream-embed"}
+	c.Routes = []config.Route{{
+		ID: "embedding", Priority: 10, Match: config.RouteMatch{Model: "text-embedding-3-small"},
+		Targets: []config.RouteTarget{{Provider: "target", Model: "upstream-embed"}},
+	}}
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	resp, err := http.Post(server.URL+"/v1/embeddings", "application/json", strings.NewReader(`{"model":"text-embedding-3-small","input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("embeddings request failed: %d %s", resp.StatusCode, raw)
+	}
+	if received.path != "/v1/embeddings" || received.model != "upstream-embed" || received.auth != "Bearer x" {
+		t.Fatalf("upstream request was not rewritten: %#v", received)
+	}
+	if !strings.Contains(string(raw), `"embedding":[0.1,0.2]`) {
+		t.Fatalf("response was not passed through: %s", raw)
+	}
+}
+
+func TestEmbeddingsProxyConvertsGeminiResponses(t *testing.T) {
+	var endpoints []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		endpoints = append(endpoints, r.URL.Path)
+		w.Header().Set("content-type", "application/json")
+		_, _ = io.WriteString(w, `{"embeddings":[{"values":[0.5]},{"values":[0.6]}]}`)
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL, ir.Gemini)
+	c.Providers[0].Models = []string{"text-embedding-004"}
+	c.Routes = []config.Route{{
+		ID: "embedding", Priority: 10, Match: config.RouteMatch{Model: "gemini-embedding"},
+		Targets: []config.RouteTarget{{Provider: "target", Model: "text-embedding-004"}},
+	}}
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	resp, err := http.Post(server.URL+"/v1/embeddings", "application/json", strings.NewReader(`{"model":"gemini-embedding","input":["a","b"]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("gemini embeddings failed: %d %s", resp.StatusCode, raw)
+	}
+	if len(endpoints) != 1 || !strings.HasSuffix(endpoints[0], ":batchEmbedContents") {
+		t.Fatalf("unexpected gemini endpoint: %#v", endpoints)
+	}
+	var payload struct {
+		Object string `json:"object"`
+		Data   []struct {
+			Index     int       `json:"index"`
+			Embedding []float64 `json:"embedding"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(raw, &payload); err != nil {
+		t.Fatalf("converted response is not JSON: %s", raw)
+	}
+	if payload.Object != "list" || len(payload.Data) != 2 || payload.Data[1].Embedding[0] != 0.6 {
+		t.Fatalf("gemini response was not normalized: %s", raw)
+	}
+}
+
+func TestEmbeddingsRejectsAnthropicProvidersAndBadInput(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte(`{}`))
+	}))
+	defer upstream.Close()
+	c := testConfig(upstream.URL, ir.Anthropic)
+	c.Providers[0].Models = []string{"embed"}
+	c.Routes = []config.Route{{
+		ID: "embedding", Priority: 10, Match: config.RouteMatch{Model: "embed"},
+		Targets: []config.RouteTarget{{Provider: "target", Model: "embed"}},
+	}}
+	g := gateway.New(config.NewStore(c), testRegistry(), observe.NewStore(10), &observe.Metrics{}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	server := httptest.NewServer(g)
+	defer server.Close()
+	resp, err := http.Post(server.URL+"/v1/embeddings", "application/json", strings.NewReader(`{"model":"embed","input":"hello"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest || !strings.Contains(string(raw), "no embeddings endpoint") {
+		t.Fatalf("anthropic provider was not rejected clearly: %d %s", resp.StatusCode, raw)
+	}
+	bad, err := http.Post(server.URL+"/v1/embeddings", "application/json", strings.NewReader(`{"model":"embed","input":42}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	badBody, _ := io.ReadAll(bad.Body)
+	bad.Body.Close()
+	if bad.StatusCode != http.StatusBadRequest || !strings.Contains(string(badBody), "input must be") {
+		t.Fatalf("invalid input was not rejected: %d %s", bad.StatusCode, badBody)
+	}
+}

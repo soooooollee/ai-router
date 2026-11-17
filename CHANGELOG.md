@@ -4,6 +4,16 @@ All notable changes follow [Keep a Changelog](https://keepachangelog.com/) and s
 
 ## [Unreleased]
 
+### New Features
+
+- Track spend per client: providers accept `pricing` (input, output and cached price per million tokens), the daily and minute usage buckets accumulate `cost_micros`, `/metrics` exposes `airoute_cost_micros_total`, and `ClientPolicy.daily_cost_limit_micros` rejects requests once the day's budget is exhausted. The cap is enforced before a request starts, so one in-flight request can overshoot by its own cost.
+- Add `failover.strategy: health` with a per-provider circuit breaker: after `failure_threshold` consecutive failures a provider is tried last for `cooldown`, and an optional `breaker` section tunes both. The default `ordered` keeps previous behaviour.
+- Add per-route `retry`, `fallback` and `timeout` overrides. A set value replaces the global policy for that route, and the route timeout caps the provider timeout.
+- Add `ClientPolicy.max_tool_rounds` to stop runaway agent loops, and `providers[].context_window` to reject oversized requests locally with 413 and let a larger-window fallback serve them.
+- Add a `/v1/embeddings` endpoint. OpenAI-compatible providers are proxied unchanged, Gemini `:embedContent`/`:batchEmbedContents` responses are normalized to the OpenAI shape, and Anthropic providers are rejected with an explanation.
+- Propagate a W3C `traceparent` to the upstream, echo `x-airoute-trace-id`, and record `trace_id` on every request log entry.
+- Parse `max_body_size` units deterministically: `32MiB` was read as `32Mi` plus a bare `B` depending on Go's map iteration order, so the shipped `examples/airoute.full.yaml` failed roughly half the time.
+
 ### Bug Fixes
 
 - Name the fields a `conversion.unsupported_fields: strict` rejection would lose, instead of returning a generic "request requires a lossy protocol conversion". The strict check is now a single helper, and a previously unreachable branch that depended on a diagnostic severity no adapter emits has been removed.

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -38,6 +39,7 @@ type Config struct {
 	Conversion   Conversion       `yaml:"conversion" json:"conversion"`
 	Retry        Retry            `yaml:"retry" json:"retry"`
 	Fallback     Fallback         `yaml:"fallback" json:"fallback"`
+	Failover     Failover         `yaml:"failover" json:"failover"`
 	Logging      Logging          `yaml:"logging" json:"logging"`
 	Metrics      Metrics          `yaml:"metrics" json:"metrics"`
 	SourcePath   string           `yaml:"-" json:"-"`
@@ -100,6 +102,53 @@ type Provider struct {
 	TimeoutText        string            `yaml:"timeout" json:"-"`
 	Timeout            time.Duration     `yaml:"-" json:"timeout"`
 	AllowPrivateURL    bool              `yaml:"allow_private_url" json:"allow_private_url"`
+	Pricing            Pricing           `yaml:"pricing" json:"pricing,omitempty"`
+	// ContextWindow is the model window used to reject oversized requests
+	// locally instead of letting the upstream return a context error.
+	ContextWindow int `yaml:"context_window" json:"context_window,omitempty"`
+}
+
+// Pricing is the list price of one million tokens. Costs are accumulated as
+// integer micro-dollars so repeated settlement cannot drift.
+type Pricing struct {
+	InputPerMillion  float64 `yaml:"input_per_million" json:"input_per_million"`
+	OutputPerMillion float64 `yaml:"output_per_million" json:"output_per_million"`
+	CachedPerMillion float64 `yaml:"cached_per_million" json:"cached_per_million,omitempty"`
+}
+
+func (p Pricing) Configured() bool {
+	return p.InputPerMillion > 0 || p.OutputPerMillion > 0 || p.CachedPerMillion > 0
+}
+
+// CostMicros converts token usage into micro-dollars. Cached tokens are billed
+// at the cached rate, which falls back to the input rate. Protocols disagree
+// about whether cache reads are part of the input count, so cached tokens are
+// treated as a subset of the input when the input is the larger number (OpenAI
+// reports prompt_tokens including cache hits) and as an addition otherwise
+// (Anthropic reports cache reads separately).
+func (p Pricing) CostMicros(usage ir.Usage) int64 {
+	if !p.Configured() {
+		return 0
+	}
+	cachedRate := p.CachedPerMillion
+	if cachedRate <= 0 {
+		cachedRate = p.InputPerMillion
+	}
+	input, output := int64(max(0, usage.InputTokens)), int64(max(0, usage.OutputTokens))
+	cached := int64(max(0, usage.CachedTokens))
+	billableInput, billableCached := input, int64(0)
+	if cached > 0 {
+		if input >= cached {
+			billableInput, billableCached = input-cached, cached
+		} else {
+			billableCached = cached - input
+		}
+	}
+	cost := float64(billableInput)*p.InputPerMillion + float64(billableCached)*cachedRate + float64(output)*p.OutputPerMillion
+	if cost <= 0 {
+		return 0
+	}
+	return int64(math.Round(cost))
 }
 
 type RequestPolicy struct {
@@ -111,6 +160,25 @@ type Route struct {
 	Priority int           `yaml:"priority" json:"priority"`
 	Match    RouteMatch    `yaml:"match" json:"match"`
 	Targets  []RouteTarget `yaml:"targets" json:"targets"`
+	// Per-route overrides. A set value replaces the top-level policy for this
+	// route instead of merging with it; unset values keep the global behaviour.
+	Retry       *Retry        `yaml:"retry" json:"retry,omitempty"`
+	Fallback    *Fallback     `yaml:"fallback" json:"fallback,omitempty"`
+	TimeoutText string        `yaml:"timeout" json:"-"`
+	Timeout     time.Duration `yaml:"-" json:"timeout,omitempty"`
+}
+
+// Failover controls how the gateway orders and skips targets when a provider
+// stops answering.
+type Failover struct {
+	Strategy string  `yaml:"strategy" json:"strategy"`
+	Breaker  Breaker `yaml:"breaker" json:"breaker"`
+}
+
+type Breaker struct {
+	FailureThreshold int           `yaml:"failure_threshold" json:"failure_threshold"`
+	CooldownText     string        `yaml:"cooldown" json:"-"`
+	Cooldown         time.Duration `yaml:"-" json:"cooldown"`
 }
 type RouteMatch struct {
 	Model    string            `yaml:"model" json:"model"`
@@ -434,6 +502,36 @@ func (c *Config) prepare() error {
 	if len(c.Fallback.OnStatus) == 0 {
 		c.Fallback.OnStatus = []int{429, 500, 502, 503, 504}
 	}
+	if c.Failover.Strategy == "" {
+		c.Failover.Strategy = "ordered"
+	}
+	if c.Failover.Breaker.FailureThreshold == 0 {
+		c.Failover.Breaker.FailureThreshold = 3
+	}
+	if c.Failover.Breaker.Cooldown, err = duration(c.Failover.Breaker.CooldownText, 30*time.Second); err != nil {
+		return fmt.Errorf("failover.breaker.cooldown: %w", err)
+	}
+	for i := range c.Routes {
+		route := &c.Routes[i]
+		if route.Timeout, err = duration(route.TimeoutText, 0); err != nil {
+			return fmt.Errorf("routes[%d].timeout: %w", i, err)
+		}
+		if route.Retry == nil {
+			continue
+		}
+		if route.Retry.MaxAttempts == 0 {
+			route.Retry.MaxAttempts = c.Retry.MaxAttempts
+		}
+		if route.Retry.BaseDelay, err = duration(route.Retry.BaseDelayText, c.Retry.BaseDelay); err != nil {
+			return fmt.Errorf("routes[%d].retry.base_delay: %w", i, err)
+		}
+		if route.Retry.MaxDelay, err = duration(route.Retry.MaxDelayText, c.Retry.MaxDelay); err != nil {
+			return fmt.Errorf("routes[%d].retry.max_delay: %w", i, err)
+		}
+		if len(route.Retry.OnStatus) == 0 {
+			route.Retry.OnStatus = append([]int(nil), c.Retry.OnStatus...)
+		}
+	}
 	if c.Conversion.UnsupportedFields == "" {
 		c.Conversion.UnsupportedFields = "warn"
 	}
@@ -469,6 +567,17 @@ func (c *Config) Validate() error {
 	}
 	if c.Admin.Enabled && !isLoopback(adminHost) && len(c.Admin.Token) < 24 {
 		errs = append(errs, errors.New("admin.token must contain at least 24 characters when admin listens beyond loopback"))
+	}
+	// Empty means the documented default (ordered), so callers that construct a
+	// Config directly without running the defaults still validate.
+	if c.Failover.Strategy != "" && c.Failover.Strategy != "ordered" && c.Failover.Strategy != "health" {
+		errs = append(errs, errors.New("failover.strategy must be ordered or health"))
+	}
+	if c.Failover.Breaker.FailureThreshold < 0 {
+		errs = append(errs, errors.New("failover.breaker.failure_threshold cannot be negative"))
+	}
+	if c.Failover.Breaker.Cooldown < 0 {
+		errs = append(errs, errors.New("failover.breaker.cooldown cannot be negative"))
 	}
 	if c.Conversion.UnsupportedFields != "strict" && c.Conversion.UnsupportedFields != "warn" && c.Conversion.UnsupportedFields != "drop" {
 		errs = append(errs, errors.New("conversion.unsupported_fields must be strict, warn, or drop"))
@@ -506,6 +615,12 @@ func (c *Config) Validate() error {
 		}
 		if p.MaxOutputTokens < 0 {
 			errs = append(errs, fmt.Errorf("providers[%d].max_output_tokens must be positive", i))
+		}
+		if p.ContextWindow < 0 {
+			errs = append(errs, fmt.Errorf("providers[%d].context_window cannot be negative", i))
+		}
+		if p.Pricing.InputPerMillion < 0 || p.Pricing.OutputPerMillion < 0 || p.Pricing.CachedPerMillion < 0 {
+			errs = append(errs, fmt.Errorf("providers[%d].pricing values cannot be negative", i))
 		}
 		if p.CodexIntegration != "" && p.CodexIntegration != "direct" && p.CodexIntegration != "passthrough" && p.CodexIntegration != "compatibility" {
 			errs = append(errs, fmt.Errorf("providers[%d].codex_integration must be direct, passthrough, or compatibility", i))
@@ -615,6 +730,24 @@ func (c *Config) Validate() error {
 		if r.Match.Protocol != "" && !protocol.Supported(r.Match.Protocol) {
 			errs = append(errs, fmt.Errorf("route %q uses unsupported protocol %q", r.ID, r.Match.Protocol))
 		}
+		if r.Timeout < 0 {
+			errs = append(errs, fmt.Errorf("route %q timeout cannot be negative", r.ID))
+		}
+		if r.Retry != nil {
+			if r.Retry.MaxAttempts < 1 {
+				errs = append(errs, fmt.Errorf("route %q retry.max_attempts must be at least 1", r.ID))
+			}
+			if r.Retry.BaseDelay < 0 || r.Retry.MaxDelay < 0 {
+				errs = append(errs, fmt.Errorf("route %q retry delays cannot be negative", r.ID))
+			}
+		}
+		if r.Fallback != nil {
+			for _, status := range r.Fallback.OnStatus {
+				if status < 100 || status > 599 {
+					errs = append(errs, fmt.Errorf("route %q fallback.on_status contains invalid status %d", r.ID, status))
+				}
+			}
+		}
 		validateTargets("route "+r.ID, r.Targets)
 	}
 	if c.DefaultRoute != nil {
@@ -641,14 +774,23 @@ func bytesize(v string, d int64) (int64, error) {
 	if v == "" {
 		return d, nil
 	}
-	units := map[string]int64{"B": 1, "KiB": 1 << 10, "MiB": 1 << 20, "GiB": 1 << 30}
-	for u, m := range units {
-		if strings.HasSuffix(v, u) {
-			n, e := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(v, u)), 10, 64)
-			return n * m, e
+	value := strings.TrimSpace(v)
+	// Longest suffix first: "32MiB" must not be read as "32Mi" plus a bare "B".
+	units := []struct {
+		suffix string
+		factor int64
+	}{{"GiB", 1 << 30}, {"MiB", 1 << 20}, {"KiB", 1 << 10}, {"B", 1}}
+	for _, unit := range units {
+		if !strings.HasSuffix(value, unit.suffix) {
+			continue
 		}
+		n, err := strconv.ParseInt(strings.TrimSpace(strings.TrimSuffix(value, unit.suffix)), 10, 64)
+		if err != nil {
+			return 0, err
+		}
+		return n * unit.factor, nil
 	}
-	return strconv.ParseInt(v, 10, 64)
+	return strconv.ParseInt(value, 10, 64)
 }
 func isLoopback(h string) bool {
 	if h == "localhost" {

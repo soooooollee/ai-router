@@ -43,6 +43,9 @@ func (g *Gateway) do(ctx context.Context, p config.Provider, payload []byte, str
 	}
 	req.Header.Set("content-type", "application/json")
 	req.Header.Set("accept", "application/json")
+	if traceparent := traceparentFromContext(ctx); traceparent != "" {
+		req.Header.Set(traceparentHeader, traceparent)
+	}
 	providerprofile.ApplyAuthenticationHeaders(req.Header, p)
 	if p.Protocol == ir.Anthropic {
 		req.Header.Set("anthropic-version", "2023-06-01")

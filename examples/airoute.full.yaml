@@ -32,6 +32,15 @@ providers:
     request_fields:
       store: false
     timeout: 5m
+    # List price per million tokens; daily spend per client is limited in the
+    # console. Cached tokens fall back to the input price when omitted.
+    pricing:
+      input_per_million: 1.25
+      output_per_million: 10
+      cached_per_million: 0.125
+    # Requests estimated above this window are rejected locally (413) instead of
+    # failing upstream, and the next target is tried instead.
+    context_window: 400000
 
   - id: anthropic
     name: Anthropic
@@ -97,3 +106,14 @@ logging:
 metrics:
   enabled: true
   path: /metrics
+
+# Per-route overrides (routes[].retry, routes[].fallback, routes[].timeout)
+# replace the global policy for that route; the route timeout caps the provider
+# timeout. They are omitted above to keep the example short.
+failover:
+  # ordered keeps the configured target order; health demotes providers whose
+  # circuit breaker is open, without dropping them.
+  strategy: health
+  breaker:
+    failure_threshold: 3
+    cooldown: 30s

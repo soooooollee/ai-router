@@ -56,6 +56,11 @@ func (s *BoltStore) ReserveUsage(_ context.Context, scope Scope, reservation Usa
 		if policy.DailyOutputTokens > 0 && bucket.OutputTokens+bucket.ReservedOutputTokens+reservation.OutputTokens > policy.DailyOutputTokens {
 			return ErrQuotaExhausted
 		}
+		// Spend is settled after the response, so this rejects once the day's
+		// budget is already exhausted rather than reserving per request.
+		if policy.DailyCostLimitMicros > 0 && bucket.CostMicros >= policy.DailyCostLimitMicros {
+			return ErrQuotaExhausted
+		}
 		bucket.Requests++
 		bucket.ReservedInputTokens += reservation.InputTokens
 		bucket.ReservedOutputTokens += reservation.OutputTokens
@@ -103,6 +108,7 @@ func (s *BoltStore) SettleUsage(_ context.Context, scope Scope, delta UsageDelta
 		bucket.ReservedOutputTokens = max64(0, bucket.ReservedOutputTokens-reservation.OutputTokens)
 		bucket.InputTokens += delta.InputTokens
 		bucket.OutputTokens += delta.OutputTokens
+		bucket.CostMicros += max64(0, delta.CostMicros)
 		if delta.Error {
 			bucket.Errors++
 		}
@@ -124,6 +130,7 @@ func (s *BoltStore) SettleUsage(_ context.Context, scope Scope, delta UsageDelta
 		minute.ReservedOutputTokens = max64(0, minute.ReservedOutputTokens-reservation.OutputTokens)
 		minute.InputTokens += delta.InputTokens
 		minute.OutputTokens += delta.OutputTokens
+		minute.CostMicros += max64(0, delta.CostMicros)
 		if delta.Error {
 			minute.Errors++
 		}
@@ -250,6 +257,7 @@ func (s *BoltStore) GetUsage(_ context.Context, scope Scope, clientID string, qu
 			summary.Total.Rejected += bucket.Rejected
 			summary.Total.InputTokens += bucket.InputTokens
 			summary.Total.OutputTokens += bucket.OutputTokens
+			summary.Total.CostMicros += bucket.CostMicros
 			summary.Total.ReservedInputTokens += bucket.ReservedInputTokens
 			summary.Total.ReservedOutputTokens += bucket.ReservedOutputTokens
 			summary.Total.Estimated += bucket.Estimated

@@ -133,14 +133,21 @@ type ClientPolicy struct {
 	DailyRequestLimit int64         `json:"daily_request_limit,omitempty"`
 	DailyInputTokens  int64         `json:"daily_input_tokens,omitempty"`
 	DailyOutputTokens int64         `json:"daily_output_tokens,omitempty"`
-	MaxOutputTokens   int           `json:"max_output_tokens,omitempty"`
+	// DailyCostLimitMicros caps spend per day in micro-dollars (1e-6 USD). The
+	// budget is enforced before a request starts, so a single in-flight request
+	// can overshoot; the next one is rejected.
+	DailyCostLimitMicros int64 `json:"daily_cost_limit_micros,omitempty"`
+	MaxOutputTokens      int   `json:"max_output_tokens,omitempty"`
+	// MaxToolRounds caps how many earlier assistant turns may already contain
+	// tool calls, which stops runaway agent loops before they burn a budget.
+	MaxToolRounds int `json:"max_tool_rounds,omitempty"`
 }
 
 func (p ClientPolicy) Validate() error {
 	if strings.TrimSpace(p.ID) == "" {
 		return errors.New("policy id is required")
 	}
-	for _, value := range []int64{int64(p.RequestsPerMinute), int64(p.Burst), int64(p.MaxConcurrent), p.DailyRequestLimit, p.DailyInputTokens, p.DailyOutputTokens, int64(p.MaxOutputTokens)} {
+	for _, value := range []int64{int64(p.RequestsPerMinute), int64(p.Burst), int64(p.MaxConcurrent), p.DailyRequestLimit, p.DailyInputTokens, p.DailyOutputTokens, p.DailyCostLimitMicros, int64(p.MaxOutputTokens), int64(p.MaxToolRounds)} {
 		if value < 0 {
 			return errors.New("policy limits cannot be negative")
 		}
@@ -200,6 +207,7 @@ type UsageBucket struct {
 	OutputTokens         int64     `json:"output_tokens"`
 	ReservedInputTokens  int64     `json:"reserved_input_tokens,omitempty"`
 	ReservedOutputTokens int64     `json:"reserved_output_tokens,omitempty"`
+	CostMicros           int64     `json:"cost_micros,omitempty"`
 	Estimated            int64     `json:"estimated_requests,omitempty"`
 }
 
@@ -219,6 +227,7 @@ type UsageDelta struct {
 	RequestID    string
 	InputTokens  int64
 	OutputTokens int64
+	CostMicros   int64
 	Error        bool
 	Rejected     bool
 	Estimated    bool
